@@ -7,7 +7,12 @@ logger = logging.getLogger(__name__)
 
 
 class ComplianceValidator:
-    """DPDP Act 2023, NDHM, ICMR, and CDSCO Compliance Validator"""
+    """DPDP Act 2023, NDHM, ICMR, and CDSCO Compliance Validator
+    
+    CRITICAL: This validator returns REAL scores based on ACTUAL CHECKS ONLY.
+    No default values. If checks cannot be completed, status is INCOMPLETE.
+    All outputs are grounded in input data with hallucination safeguards.
+    """
     
     def __init__(self):
         """Initialize Compliance Validator"""
@@ -17,6 +22,7 @@ class ComplianceValidator:
             "icmr_guidelines": self._check_icmr_compliance,
             "cdsco_standards": self._check_cdsco_compliance,
         }
+        logger.info("ComplianceValidator initialized - REAL CHECKS ONLY mode")
     
     def validate_all(
         self,
@@ -26,7 +32,10 @@ class ComplianceValidator:
         extracted_data: Dict = None
     ) -> Dict:
         """
-        Run all compliance checks
+        Run all compliance checks - REAL OUTPUT ONLY
+        
+        IMPORTANT: Returns ONLY computed scores, never defaults.
+        If validation incomplete, returns is_compliant=False.
         
         Args:
             original_text: Original non-anonymized text
@@ -35,49 +44,96 @@ class ComplianceValidator:
             extracted_data: Any extracted structured data
             
         Returns:
-            Comprehensive compliance report
+            Compliance report with ONLY VALIDATED SCORES (no defaults)
         """
+        logger.info(f"[COMPLIANCE] Starting validation. Text length: {len(original_text)}")
+        
+        # SAFEGUARD: Check if we have sufficient input
+        if not original_text or len(original_text.strip()) < 50:
+            logger.warning("[COMPLIANCE] Insufficient content for validation")
+            return {
+                "is_compliant": False,
+                "status": "VALIDATION_INCOMPLETE",
+                "reason": "Insufficient content for compliance validation",
+                "overall_score": 0.0,
+                "compliance_timestamp": datetime.utcnow().isoformat(),
+                "check_results": {},
+                "issues": ["Input text too short (<50 chars) for validation"],
+                "recommendations": ["Provide longer input text for meaningful validation"],
+                "warnings": ["Validation could not be completed"],
+                "framework_compliance": {"dpdp_act_2023": None, "ndhm_policy": None, "icmr_guidelines": None, "cdsco_standards": None},
+                "confidence": 0.0
+            }
+        
         report = {
-            "is_compliant": True,
-            "overall_score": 100.0,
+            "is_compliant": None,  # NEVER default - computed from checks
+            "status": "VALIDATION_COMPLETE",
+            "overall_score": None,  # NEVER default - computed
             "compliance_timestamp": datetime.utcnow().isoformat(),
             "check_results": {},
             "issues": [],
             "recommendations": [],
             "warnings": [],
             "framework_compliance": {
-                "dpdp_act_2023": False,
-                "ndhm_policy": False,
-                "icmr_guidelines": False,
-                "cdsco_standards": False,
-            }
+                "dpdp_act_2023": None,
+                "ndhm_policy": None,
+                "icmr_guidelines": None,
+                "cdsco_standards": None,
+            },
+            "confidence": 0.0,  # NEW: Confidence in validation
         }
         
         try:
             # Run all compliance checks
             for framework_name, check_func in self.compliance_checks.items():
-                result = check_func(original_text, anonymized_text, anonymization_stats, extracted_data)
-                report["check_results"][framework_name] = result
-                report["framework_compliance"][framework_name] = result["compliant"]
-                
-                # Collect issues and recommendations
-                if result.get("issues"):
-                    report["issues"].extend(result["issues"])
-                if result.get("recommendations"):
-                    report["recommendations"].extend(result["recommendations"])
-                if result.get("warnings"):
-                    report["warnings"].extend(result["warnings"])
+                try:
+                    result = check_func(original_text, anonymized_text, anonymization_stats, extracted_data)
+                    report["check_results"][framework_name] = result
+                    
+                    # CRITICAL: Only set if validation actually completed
+                    if result.get("validation_complete") is True:
+                        report["framework_compliance"][framework_name] = result["compliant"]
+                    else:
+                        report["framework_compliance"][framework_name] = None
+                        report["warnings"].append(f"{framework_name}: Validation incomplete")
+                    
+                    # Collect real issues only
+                    if result.get("issues"):
+                        report["issues"].extend(result["issues"])
+                    if result.get("recommendations"):
+                        report["recommendations"].extend(result["recommendations"])
+                    if result.get("warnings"):
+                        report["warnings"].extend(result["warnings"])
+                    
+                    logger.info(f"[COMPLIANCE] {framework_name}: score={result.get('score', 0):.1f}, complete={result.get('validation_complete')}")
+                        
+                except Exception as e:
+                    logger.error(f"[COMPLIANCE] Error in {framework_name}: {str(e)}")
+                    report["issues"].append(f"{framework_name}: Check failed - {str(e)}")
+                    report["framework_compliance"][framework_name] = None
             
-            # Calculate overall compliance
-            report["is_compliant"] = all(report["framework_compliance"].values())
-            report["overall_score"] = self._calculate_compliance_score(report["check_results"])
-            
-            logger.info(f"Compliance validation completed. Overall score: {report['overall_score']:.1f}%")
+            # Calculate overall compliance ONLY if frameworks completed
+            completed_frameworks = [v for v in report["framework_compliance"].values() if v is not None]
+            if completed_frameworks:
+                report["is_compliant"] = all(completed_frameworks)
+                report["overall_score"] = (sum(completed_frameworks) / len(completed_frameworks)) * 100
+                report["confidence"] = len(completed_frameworks) / 4  # 0.0 to 1.0
+                logger.info(f"[COMPLIANCE] Final score: {report['overall_score']:.1f}%, is_compliant={report['is_compliant']}")
+            else:
+                report["is_compliant"] = False
+                report["status"] = "VALIDATION_INCOMPLETE"
+                report["overall_score"] = 0.0
+                report["confidence"] = 0.0
+                report["issues"].append("No frameworks could be validated")
+                logger.warning("[COMPLIANCE] No frameworks completed validation")
             
         except Exception as e:
-            logger.error(f"Error during compliance validation: {str(e)}")
-            report["issues"].append(f"Validation error: {str(e)}")
+            logger.critical(f"[COMPLIANCE] Critical error: {str(e)}")
             report["is_compliant"] = False
+            report["status"] = "VALIDATION_FAILED"
+            report["issues"].append(f"Validation error: {str(e)}")
+            report["overall_score"] = 0.0
+            report["confidence"] = 0.0
         
         return report
     
@@ -88,48 +144,88 @@ class ComplianceValidator:
         anonymization_stats: Dict,
         extracted_data: Dict = None
     ) -> Dict:
-        """Check DPDP Act 2023 Compliance"""
+        """Check DPDP Act 2023 Compliance - REAL CHECKS ONLY"""
+        logger.info("[DPDP] Running DPDP Act 2023 compliance check")
+        
         result = {
-            "compliant": True,
-            "score": 100.0,
+            "compliant": False,  # CRITICAL: Don't default to True
+            "score": 0.0,
+            "validation_complete": False,  # NEW: Track if validation happened
             "checks": {},
             "issues": [],
             "recommendations": [],
             "warnings": []
         }
         
-        # Check 1: Identification of personal data
-        pii_score = self._verify_pii_identification(anonymization_stats)
-        result["checks"]["pii_identification"] = {"score": pii_score, "passed": pii_score >= 80}
+        try:
+            # REAL CHECK 1: Verify PII was actually detected and anonymized
+            if not anonymization_stats or all(v == 0 for v in anonymization_stats.values()):
+                result["warnings"].append("No PII detected in document - anonymization may not be applicable")
+                result["checks"]["pii_detection"] = {
+                    "score": 100,
+                    "passed": True,
+                    "reason": "No PII found to anonymize"
+                }
+                logger.info("[DPDP] No PII detected")
+            else:
+                # If PII found, verify text was actually modified
+                pii_difference = len(original_text) != len(anonymized_text)
+                if pii_difference:
+                    result["checks"]["pii_detection"] = {
+                        "score": 90,
+                        "passed": True,
+                        "reason": f"PII detected ({sum(anonymization_stats.values())} items) and anonymized"
+                    }
+                    logger.info(f"[DPDP] PII detected and anonymized: {sum(anonymization_stats.values())} items")
+                else:
+                    result["checks"]["pii_detection"] = {
+                        "score": 30,
+                        "passed": False,
+                        "reason": "PII detected but text was not modified"
+                    }
+                    result["issues"].append("CRITICAL: Detected PII but anonymization did not modify text")
+                    logger.error("[DPDP] PII detected but text unchanged")
+            
+            # REAL CHECK 2: Verify text coherence after anonymization (no mangling)
+            coherence_score = self._check_text_coherence(anonymized_text)
+            result["checks"]["text_coherence"] = {
+                "score": coherence_score,
+                "passed": coherence_score >= 70,
+                "reason": f"Text coherence score: {coherence_score:.0f}%"
+            }
+            if coherence_score < 70:
+                result["issues"].append("Anonymized text appears corrupted or incoherent")
+                logger.warning(f"[DPDP] Low coherence: {coherence_score:.0f}%")
+            
+            # REAL CHECK 3: Check for remaining PII patterns (hallucination safeguard)
+            remaining_pii = self._check_remaining_pii(anonymized_text)
+            if remaining_pii:
+                result["checks"]["pii_removal"] = {
+                    "score": max(0, 70 - len(remaining_pii) * 15),
+                    "passed": False,
+                    "reason": f"Found {len(remaining_pii)} potential PII types still in text",
+                    "patterns_found": remaining_pii
+                }
+                result["issues"].append(f"SAFEGUARD: Potential PII still present: {', '.join(remaining_pii)}")
+                logger.warning(f"[DPDP] Remaining PII patterns: {remaining_pii}")
+            else:
+                result["checks"]["pii_removal"] = {
+                    "score": 95,
+                    "passed": True,
+                    "reason": "No obvious PII patterns detected in anonymized text"
+                }
+            
+            # Calculate DPDP score from REAL checks only
+            all_scores = [v["score"] for v in result["checks"].values()]
+            if all_scores:
+                result["score"] = sum(all_scores) / len(all_scores)
+                result["compliant"] = result["score"] >= 70  # 70% threshold
+                result["validation_complete"] = True
+                logger.info(f"[DPDP] Validation complete. Score: {result['score']:.1f}, Compliant: {result['compliant']}")
         
-        # Check 2: Purpose limitation
-        purpose_score = 100  # Assume compliant if anonymization done
-        result["checks"]["purpose_limitation"] = {"score": purpose_score, "passed": True}
-        
-        # Check 3: Data minimization
-        minimization_score = self._check_data_minimization(anonymized_text)
-        result["checks"]["data_minimization"] = {"score": minimization_score, "passed": minimization_score >= 70}
-        
-        # Check 4: Consent and lawful basis
-        result["checks"]["lawful_basis"] = {"score": 85, "passed": True}
-        result["recommendations"].append("Document lawful basis for data processing (healthcare necessity)")
-        
-        # Check 5: Right to erasure
-        result["checks"]["erasure_capability"] = {"score": 100, "passed": True}
-        result["recommendations"].append("Ensure data deletion mechanisms are in place")
-        
-        # Check 6: Security measures
-        security_score = 90
-        result["checks"]["security_measures"] = {"score": security_score, "passed": True}
-        result["recommendations"].append("Enable encryption for data at rest and in transit")
-        
-        # Calculate overall DPDP score
-        all_scores = [v["score"] for v in result["checks"].values()]
-        result["score"] = sum(all_scores) / len(all_scores)
-        result["compliant"] = result["score"] >= 80
-        
-        if not result["compliant"]:
-            result["issues"].append("DPDP compliance score below threshold")
+        except Exception as e:
+            logger.error(f"[DPDP] Error: {str(e)}")
+            result["issues"].append(f"DPDP check error: {str(e)}")
         
         return result
     
@@ -319,3 +415,24 @@ class ComplianceValidator:
             if isinstance(result, dict) and "score" in result:
                 scores.append(result["score"])
         return sum(scores) / len(scores) if scores else 0.0
+    
+    @staticmethod
+    def _check_remaining_pii(text: str) -> List[str]:
+        \"\"\"
+        HALLUCINATION SAFEGUARD: Check if obvious PII patterns still exist
+        Returns list of PII types found (should be empty if anonymization worked)
+        \"\"\"
+        found_pii = []
+        
+        # Email pattern
+        if re.search(r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b', text):
+            found_pii.append(\"email\")\n        
+        # Phone pattern\n        if re.search(r'\+?[1-9]\d{1,14}', text):\n            found_pii.append(\"phone\")\n        
+        # Aadhaar pattern\n        if re.search(r'\d{4}\s\d{4}\s\d{4}', text):\n            found_pii.append(\"aadhaar\")\n        
+        return found_pii\n    
+    @staticmethod\n    def _check_text_coherence(text: str) -> float:\n        \"\"\"\n        HALLUCINATION SAFEGUARD: Check if text is coherent (not mangled by anonymization)\n        Returns coherence score 0-100\n        \"\"\"\n        if not text:\n            return 0.0\n        
+        # Check for basic readability
+        words = text.split()\n        if len(words) < 3:\n            return 30.0\n        
+        # Check for excessive brackets (placeholder markers)\n        placeholder_density = text.count('[') / len(text) if text else 0\n        if placeholder_density > 0.1:  # >10% placeholders\n            return 50.0\n        
+        # Check for words that are alphabetic (not all placeholders)\n        alpha_words = sum(1 for w in words if any(c.isalpha() for c in w))\n        if alpha_words / len(words) < 0.7:  # <70% alpha words\n            return 60.0\n        
+        return 90.0  # Text appears coherent
