@@ -11,7 +11,7 @@ const apiClient = axios.create({
 
 // Add token to all requests
 apiClient.interceptors.request.use((config) => {
-  const token = localStorage.getItem('auth_token');
+  const token = localStorage.getItem('access_token');
   if (token) {
     config.headers.Authorization = `Bearer ${token}`;
   }
@@ -42,9 +42,8 @@ export const submissionAPI = {
     const formData = new FormData();
     formData.append('file', file);
     formData.append('type', type);
-    return apiClient.post('/submissions/upload', formData, {
-      headers: { 'Content-Type': 'multipart/form-data' },
-    });
+    // DO NOT set Content-Type header manually - axios will detect FormData and set it correctly
+    return apiClient.post('/submissions/upload', formData);
   },
 
   getStatus: (submissionId) =>
