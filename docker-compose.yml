@@ -1,0 +1,127 @@
+version: '3.8'
+
+services:
+  # PostgreSQL Database
+  postgres:
+    image: postgres:15-alpine
+    container_name: swastya-postgres
+    environment:
+      POSTGRES_USER: ${DB_USER:-swastya_user}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-secure_password}
+      POSTGRES_DB: ${DB_NAME:-swastya_regulator}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-swastya_user}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - swastya-network
+
+  # Redis Cache & Message Broker
+  redis:
+    image: redis:7-alpine
+    container_name: swastya-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - swastya-network
+
+  # Flask Backend
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: swastya-backend
+    environment:
+      FLASK_ENV: development
+      FLASK_APP: backend/app.py
+      DATABASE_URL: postgresql://${DB_USER:-swastya_user}:${DB_PASSWORD:-secure_password}@postgres:5432/${DB_NAME:-swastya_regulator}
+      REDIS_URL: redis://redis:6379/0
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY:-dev-secret-key-change-in-production}
+      UPLOAD_FOLDER: /app/uploads
+      ANONYMIZATION_VAULT_PATH: /app/vault
+    ports:
+      - "5000:5000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./backend:/app/backend
+      - uploads_data:/app/uploads
+      - vault_data:/app/vault
+      - logs_data:/app/logs
+    command: >
+      sh -c "python init_db.py && 
+             python -m flask run --host=0.0.0.0"
+    networks:
+      - swastya-network
+
+  # Celery Worker for Background Tasks
+  celery-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: swastya-celery
+    environment:
+      FLASK_ENV: development
+      DATABASE_URL: postgresql://${DB_USER:-swastya_user}:${DB_PASSWORD:-secure_password}@postgres:5432/${DB_NAME:-swastya_regulator}
+      REDIS_URL: redis://redis:6379/0
+      CELERY_BROKER_URL: redis://redis:6379/0
+      CELERY_RESULT_BACKEND: redis://redis:6379/0
+    depends_on:
+      - postgres
+      - redis
+      - backend
+    volumes:
+      - ./backend:/app/backend
+      - uploads_data:/app/uploads
+      - vault_data:/app/vault
+      - logs_data:/app/logs
+    command: celery -A backend.celery_tasks worker --loglevel=info
+    networks:
+      - swastya-network
+
+  # Celery Flower (Monitoring)
+  flower:
+    image: mher/flower
+    container_name: swastya-flower
+    environment:
+      CELERY_BROKER_URL: redis://redis:6379/0
+      CELERY_RESULT_BACKEND: redis://redis:6379/0
+    ports:
+      - "5555:5555"
+    depends_on:
+      - redis
+      - celery-worker
+    networks:
+      - swastya-network
+
+volumes:
+  postgres_data:
+    name: swastya-postgres-data
+  redis_data:
+    name: swastya-redis-data
+  uploads_data:
+    name: swastya-uploads-data
+  vault_data:
+    name: swastya-vault-data
+  logs_data:
+    name: swastya-logs-data
+
+networks:
+  swastya-network:
+    name: swastya-network
+    driver: bridge

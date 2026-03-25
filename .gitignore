@@ -1,0 +1,104 @@
+# Environment variables and secrets
+.env
+.env.local
+.env.*.local
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+pip-wheel-metadata/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Virtual environments
+venv/
+ENV/
+env/
+.venv
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+*.sublime-project
+*.sublime-workspace
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.hypothesis/
+
+# Database
+*.db
+*.sqlite
+*.sqlite3
+data/vault
+
+# Uploads and temporary files
+uploads/
+vault/
+logs/
+*.log
+tmp/
+temp/
+
+# OS
+.DS_Store
+Thumbs.db
+.AppleDouble
+.LSOverride
+
+# Node (for frontend)
+node_modules/
+npm-debug.log
+yarn-error.log
+dist/
+
+# Docker
+.dockerignore
+
+# Project specific
+*.pdf
+*.docx
+results/
+exports/
+
+# IDE specific
+.vscode/settings.json
+.vscode/launch.json
+.vscode/tasks.json
+
+# Backup files
+*.backup
+*.bak
+~*
+
+# Sensitive data
+credentials.json
+secrets.yaml
+private_key*
+*.pem
+!
