@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { FiUpload, FiFile, FiX, FiLoader } from 'react-icons/fi';
-import { submissionApi, handleApiError } from '../utils/api';
+import { submissionAPI } from '../services/api';
 
 export default function Upload({ onUploadSuccess }) {
   const [dragActive, setDragActive] = useState(false);
@@ -73,7 +73,7 @@ export default function Upload({ onUploadSuccess }) {
       formData.append('file', file);
       formData.append('type', docType);
 
-      const response = await submissionApi.upload(formData);
+      const response = await submissionAPI.uploadFile(file, docType);
       const { submission_id, message } = response.data;
 
       setSuccess(`${message} (ID: ${submission_id})`);
@@ -88,7 +88,7 @@ export default function Upload({ onUploadSuccess }) {
       document.querySelector('input[type="file"]').value = '';
       setDocType('form_44');
     } catch (err) {
-      setError(handleApiError(err));
+      setError(err.response?.data?.error || err.message || 'Upload failed');
     } finally {
       setLoading(false);
     }

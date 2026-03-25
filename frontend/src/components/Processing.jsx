@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { FiRefreshCw, FiLoader, FiCheckCircle, FiAlertCircle } from 'react-icons/fi';
-import { submissionApi, handleApiError } from '../utils/api';
+import { submissionAPI } from '../services/api';
 import { formatDistanceToNow } from 'date-fns';
 
 export default function Processing({ submissionId, onProcessingComplete }) {
@@ -27,7 +27,7 @@ export default function Processing({ submissionId, onProcessingComplete }) {
 
   const fetchStatus = async () => {
     try {
-      const response = await submissionApi.getStatus(submissionId);
+      const response = await submissionAPI.getStatus(submissionId);
       const data = response.data;
       setStatus(data);
       setError('');
@@ -42,7 +42,7 @@ export default function Processing({ submissionId, onProcessingComplete }) {
 
       setLoading(false);
     } catch (err) {
-      setError(handleApiError(err));
+      setError(err.response?.data?.error || err.message || 'Error fetching status');
       setLoading(false);
     }
   };

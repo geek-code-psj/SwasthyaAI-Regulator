@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { FiMail, FiLock, FiLoader } from 'react-icons/fi';
-import { authApi, handleApiError } from '../utils/api';
+import { authAPI } from '../services/api';
 
 export default function Login() {
   const [loading, setLoading] = useState(false);
@@ -23,7 +23,7 @@ export default function Login() {
     setSuccess('');
 
     try {
-      const response = await authApi.getToken();
+      const response = await authAPI.getToken();
       const { access_token } = response.data;
 
       // Store token
@@ -40,7 +40,7 @@ export default function Login() {
         navigate('/dashboard');
       }, 1000);
     } catch (err) {
-      setError(handleApiError(err));
+      setError(err.response?.data?.error || err.message || 'Login failed');
     } finally {
       setLoading(false);
     }

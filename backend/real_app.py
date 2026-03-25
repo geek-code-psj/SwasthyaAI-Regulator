@@ -358,10 +358,10 @@ def get_status(submission_id):
         if not row:
             return jsonify({"error": "Submission not found"}), 404
         
-        # Unpack the row
+        # Unpack the row (17 columns)
         (id_, filename, orig_filename, sub_type, status, file_path, file_size, 
          created_at, proc_start, proc_end, proc_duration, ext_text, anon_text, 
-         summary, pii_stats, compliance) = row
+         summary, pii_stats, compliance, error_msg) = row
         
         return jsonify({
             "submission_id": submission_id,
@@ -390,10 +390,10 @@ def get_results(submission_id):
         if not row:
             return jsonify({"error": "Submission not found"}), 404
         
-        # Unpack the row
+        # Unpack the row (17 columns)
         (id_, filename, orig_filename, sub_type, status, file_path, file_size, 
          created_at, proc_start, proc_end, proc_duration, ext_text, anon_text, 
-         summary, pii_stats_str, compliance_str) = row
+         summary, pii_stats_str, compliance_str, error_msg) = row
         
         pii_stats = json.loads(pii_stats_str) if pii_stats_str else {}
         compliance = json.loads(compliance_str) if compliance_str else {}
