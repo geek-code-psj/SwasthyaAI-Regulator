@@ -37,6 +37,17 @@ class Config:
     DATA_RETENTION_DAYS = int(os.getenv("DATA_RETENTION_DAYS", 90))
     K_ANONYMITY_THRESHOLD = int(os.getenv("K_ANONYMITY_THRESHOLD", 5))
     
+    # Celery Configuration
+    CELERY_BROKER_URL = os.getenv("CELERY_BROKER_URL", "redis://localhost:6379/0")
+    CELERY_RESULT_BACKEND = os.getenv("CELERY_RESULT_BACKEND", "redis://localhost:6379/0")
+    CELERY_ACCEPT_CONTENT = ['json']
+    CELERY_TASK_SERIALIZER = 'json'
+    CELERY_RESULT_SERIALIZER = 'json'
+    CELERY_TIMEZONE = 'UTC'
+    CELERY_TASK_TRACK_STARTED = True
+    CELERY_TASK_TIME_LIMIT = 30 * 60  # 30 minutes
+    CELERY_RESULT_EXPIRES = 3600  # 1 hour
+    
     # Logging
     LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
 

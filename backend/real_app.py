@@ -1,11 +1,18 @@
 """
 SwasthyaAI Regulator - Real Backend with Actual File Processing
 This backend actually reads and analyzes uploaded documents
+
+Integrated modules (Phase 2B):
+- pdf_extractor: Hybrid PDF/image extraction with confidence scoring
+- anonymizer: DPDP-compliant PII anonymization with secure vault
+- summarizer: Non-hallucinating extractive summarization
+- compliance_validator: Real rule-based compliance scoring
 """
 
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 from flask_jwt_extended import JWTManager, create_access_token, jwt_required
+from celery import Celery
 import os
 import re
 import uuid
@@ -13,18 +20,36 @@ from datetime import datetime, timedelta
 import json
 import sqlite3
 from pathlib import Path
-import fitz  # PyMuPDF for PDF text extraction
-import pytesseract  # OCR for scanned PDFs
+import logging
+
+# Import new processing modules
+from modules.pdf_extractor import PDFExtractor, ExtractionResult
+from modules.anonymizer import DPDPAnonymizer
+from modules.summarizer import NonHallucinatingSummarizer
+from modules.compliance_validator import ComplianceValidator
+from config import Config
+
+# Legacy imports (kept for backward compatibility if needed)
+import fitz  # PyMuPDF
+import pytesseract  # OCR
 from PIL import Image
 import pdfplumber
 import io
 
+# Setup logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='[%(asctime)s] %(levelname)s - %(name)s: %(message)s'
+)
+logger = logging.getLogger(__name__)
+
 # Initialize Flask
 app = Flask(__name__)
-app.config['SECRET_KEY'] = 'real-secret-key-change-in-prod'
-app.config['JWT_SECRET_KEY'] = 'real-jwt-secret-change-in-prod'
+app.config.from_object(Config)
+app.config['SECRET_KEY'] = os.getenv('SECRET_KEY', 'real-secret-key-change-in-prod')
+app.config['JWT_SECRET_KEY'] = os.getenv('JWT_SECRET_KEY', 'real-jwt-secret-change-in-prod')
 app.config['JWT_ACCESS_TOKEN_EXPIRES'] = timedelta(hours=1)
-app.config['UPLOAD_FOLDER'] = 'uploads'
+app.config['UPLOAD_FOLDER'] = os.getenv('UPLOAD_FOLDER', 'uploads')
 app.config['MAX_CONTENT_LENGTH'] = 100 * 1024 * 1024  # 100MB
 
 # Create upload folder
@@ -35,6 +60,32 @@ CORS(app)
 
 # Initialize JWT
 jwt = JWTManager(app)
+
+# Initialize Celery
+def make_celery(app_instance):
+    """Initialize Celery with Flask app"""
+    celery_instance = Celery(
+        app_instance.import_name,
+        backend=app_instance.config['CELERY_RESULT_BACKEND'],
+        broker=app_instance.config['CELERY_BROKER_URL']
+    )
+    celery_instance.conf.update(app_instance.config)
+    
+    class ContextTask(celery_instance.Task):
+        """Make celery tasks work with Flask app context"""
+        def __call__(self, *args, **kwargs):
+            with app_instance.app_context():
+                return self.run(*args, **kwargs)
+    
+    celery_instance.Task = ContextTask
+    return celery_instance
+
+try:
+    celery = make_celery(app)
+    logger.info("✓ Celery initialized successfully")
+except Exception as e:
+    logger.warning(f"⚠ Celery initialization failed: {str(e)} - Running in sync mode")
+    celery = None
 
 # Initialize SQLite database
 def init_db():
@@ -59,6 +110,13 @@ def init_db():
         key_findings TEXT,
         pii_stats TEXT,
         compliance_result TEXT,
+        extraction_quality TEXT,
+        extraction_confidence REAL,
+        extraction_method TEXT,
+        extraction_pages TEXT,
+        anonymity_k_score REAL,
+        anonymity_l_score REAL,
+        anonymity_t_score REAL,
         error_message TEXT
     )''')
     conn.commit()
@@ -400,7 +458,17 @@ def get_token():
 @app.route('/api/submissions/upload', methods=['POST'])
 @jwt_required()
 def upload_file():
-    """Upload and process a real file"""
+    """Upload and process a file - Uses Celery async tasks with sync fallback
+    
+    ASYNC MODE (if Celery/Redis available):
+    - Returns immediately with submission_id
+    - Processing happens in background
+    - Use /status endpoint to check progress
+    
+    SYNC MODE (fallback if Celery unavailable):
+    - Processes synchronously
+    - Returns full results immediately
+    """
     try:
         if 'file' not in request.files:
             return jsonify({"error": "No file provided"}), 400
@@ -419,58 +487,212 @@ def upload_file():
         file.save(file_path)
         file_size = os.path.getsize(file_path)
         
-        # Extract text from uploaded file (REAL!)
-        extracted_text = RealTextProcessor.extract_text(file_path)
-        
-        # Detect PII (REAL!)
-        pii_stats, pii_found = RealTextProcessor.detect_pii(extracted_text)
-        
-        # Anonymize (REAL!)
-        anonymized_text, token_vault = RealTextProcessor.anonymize_text(extracted_text, pii_found)
-        
-        # Generate summary (REAL!)
-        summary, key_findings = RealTextProcessor.generate_summary(extracted_text)
-        
-        # Validate compliance (REAL!)
-        compliance_result = RealTextProcessor.validate_compliance(extracted_text, pii_stats)
-        
-        # Store in database
+        # Create database entry
         conn = sqlite3.connect('submissions.db')
         c = conn.cursor()
         c.execute('''INSERT INTO submissions 
                      (id, filename, original_filename, submission_type, status, file_path, 
-                      file_size, created_at, processing_start_date, processing_end_date, 
-                      processing_duration, extracted_text, anonymized_text, summary, 
-                      key_findings, pii_stats, compliance_result)
-                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
-                  (submission_id, filename, file.filename, submission_type, 'completed',
-                   file_path, file_size, datetime.utcnow(), datetime.utcnow(), 
-                   datetime.utcnow(), 2.5, extracted_text, anonymized_text, 
-                   summary, json.dumps(key_findings), json.dumps(pii_stats), json.dumps(compliance_result)))
+                      file_size, created_at, processing_start_date)
+                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)''',
+                  (submission_id, filename, file.filename, submission_type, 'pending',
+                   file_path, file_size, datetime.utcnow(), datetime.utcnow()))
         conn.commit()
         conn.close()
         
-        print(f"✅ [REAL PROCESSING] Uploaded: {submission_id}")
-        print(f"   - File: {file.filename} ({file_size} bytes)")
-        print(f"   - PII Found: {pii_stats}")
-        print(f"   - Compliance Score: {compliance_result['overall_score']}")
+        logger.info(f"[UPLOAD] New submission: {submission_id}")
+        logger.info(f"         File: {file.filename} ({file_size} bytes)")
         
-        return jsonify({
-            "submission_id": submission_id,
-            "status": "completed",
-            "message": "Document processed successfully",
-            "pii_detected": len(pii_stats) > 0,
-            "pii_count": sum(pii_stats.values())
-        }), 202
+        # ========== ASYNC MODE (if Celery available) ==========
+        if celery:
+            try:
+                logger.info(f"[ASYNC] Queuing task for {submission_id}")
+                
+                # Import Celery task (avoid circular imports)
+                from celery_tasks import process_document
+                
+                # Queue the async task
+                task = process_document.apply_async(
+                    args=(submission_id,),
+                    task_id=f"process_{submission_id}"
+                )
+                
+                logger.info(f"[ASYNC] Task queued: {task.id}")
+                
+                return jsonify({
+                    "submission_id": submission_id,
+                    "status": "pending",
+                    "message": "Document queued for processing",
+                    "async_mode": True,
+                    "task_id": task.id,
+                    "filename": file.filename
+                }), 202
+            
+            except Exception as e:
+                logger.warning(f"[ASYNC] Celery task failed: {str(e)}, falling back to sync mode")
+                # Fall through to sync mode
         
+        # ========== SYNC MODE (fallback) ==========
+        logger.info(f"[SYNC] Processing synchronously for {submission_id}")
+        
+        result = _process_document_sync(submission_id, file_path)
+        
+        if result.get('success'):
+            # Update database with results
+            conn = sqlite3.connect('submissions.db')
+            c = conn.cursor()
+            c.execute('''UPDATE submissions 
+                         SET status = ?,
+                             extracted_text = ?,
+                             anonymized_text = ?,
+                             summary = ?,
+                             key_findings = ?,
+                             pii_stats = ?,
+                             compliance_result = ?,
+                             extraction_quality = ?,
+                             extraction_confidence = ?,
+                             extraction_method = ?,
+                             extraction_pages = ?,
+                             anonymity_k_score = ?,
+                             anonymity_l_score = ?,
+                             anonymity_t_score = ?,
+                             processing_end_date = ?
+                         WHERE id = ?''',
+                      (result['status'],
+                       result.get('extraction', {}).get('text', ''),
+                       result.get('anonymization', {}).get('anonymized_text', ''),
+                       result.get('summarization', {}).get('summary', ''),
+                       json.dumps(result.get('summarization', {}).get('key_findings', [])),
+                       json.dumps(result.get('anonymization', {}).get('pii_stats', {})),
+                       json.dumps(result.get('compliance', {})),
+                       result.get('extraction', {}).get('quality', 'unknown'),
+                       result.get('extraction', {}).get('confidence', 0),
+                       result.get('extraction', {}).get('method', 'unknown'),
+                       result.get('extraction', {}).get('pages', '0/0'),
+                       result.get('anonymization', {}).get('k_anonymity', 0),
+                       result.get('anonymization', {}).get('l_diversity', 0),
+                       result.get('anonymization', {}).get('t_closeness', 0),
+                       datetime.utcnow(),
+                       submission_id))
+            conn.commit()
+            conn.close()
+            
+            return jsonify({
+                "submission_id": submission_id,
+                "status": "completed",
+                "message": "Document processed successfully",
+                "async_mode": False,
+                "extraction": result.get('extraction', {}),
+                "anonymization": result.get('anonymization', {}),
+                "summarization": result.get('summarization', {}),
+                "compliance": result.get('compliance', {})
+            }), 200
+        else:
+            # Update error status
+            conn = sqlite3.connect('submissions.db')
+            c = conn.cursor()
+            c.execute('UPDATE submissions SET status = ?, error_message = ? WHERE id = ?',
+                      ('failed', result.get('error', 'Unknown error'), submission_id))
+            conn.commit()
+            conn.close()
+            
+            return jsonify({
+                "error": result.get('error', 'Processing failed'),
+                "submission_id": submission_id
+            }), 400
+    
     except Exception as e:
-        print(f"❌ Upload error: {str(e)}")
-        return jsonify({"error": str(e)}), 500
+        logger.error(f"[ERROR] Upload processing failed: {str(e)}", exc_info=True)
+        return jsonify({"error": f"Processing failed: {str(e)}"}), 500
+
+
+def _process_document_sync(submission_id, file_path):
+    """Synchronous document processing (fallback if Celery unavailable)
+    
+    Returns complete result dict with all phases
+    """
+    try:
+        logger.info(f"[SYNC] Starting sync processing for {submission_id}")
+        
+        # ========== PHASE 1: EXTRACTION ==========
+        logger.info(f"[PHASE 1] Extracting text from {file_path}...")
+        extraction_result = PDFExtractor.extract_document(file_path)
+        
+        if extraction_result.error or not extraction_result.text:
+            logger.error(f"[PHASE 1] Extraction failed: {extraction_result.error}")
+            return {
+                'success': False,
+                'error': extraction_result.error or "Extraction failed",
+                'stage': 'extraction'
+            }
+        
+        extracted_text = extraction_result.text
+        logger.info(f"[PHASE 1] ✓ Extracted {len(extracted_text)} chars")
+        
+        # ========== PHASE 2: ANONYMIZATION ==========
+        logger.info(f"[PHASE 2] Anonymizing PII...")
+        anonymizer = DPDPAnonymizer(vault_path=app.config.get('ANONYMIZATION_VAULT_PATH', 'data/vault'))
+        anonymized_text, encrypted_vault = anonymizer.anonymize_text(extracted_text)
+        pii_stats = anonymizer.anonymization_stats if hasattr(anonymizer, 'anonymization_stats') else {}
+        anonymity_metrics = anonymizer.calculate_anonymity_metrics(anonymized_text) if hasattr(anonymizer, 'calculate_anonymity_metrics') else {}
+        
+        logger.info(f"[PHASE 2] ✓ PII stats: {pii_stats}")
+        
+        # ========== PHASE 3: SUMMARIZATION ==========
+        logger.info(f"[PHASE 3] Generating summary...")
+        summarizer = NonHallucinatingSummarizer()
+        summary_result = summarizer.summarize(extracted_text) if hasattr(summarizer, 'summarize') else {}
+        key_findings = summarizer.extract_key_findings(extracted_text) if hasattr(summarizer, 'extract_key_findings') else []
+        
+        logger.info(f"[PHASE 3] ✓ Summary complete with {len(key_findings)} findings")
+        
+        # ========== PHASE 4: COMPLIANCE ==========
+        logger.info(f"[PHASE 4] Validating compliance...")
+        validator = ComplianceValidator()
+        compliance_result = validator.validate_all(extracted_text, anonymized_text, pii_stats)
+        
+        logger.info(f"[PHASE 4] ✓ Compliance score: {compliance_result.get('overall_score', 0)}")
+        
+        # ========== AGGREGATE RESULTS ==========
+        return {
+            'success': True,
+            'status': 'completed',
+            'extraction': {
+                'text': extracted_text,
+                'quality': extraction_result.extraction_quality,
+                'confidence': extraction_result.confidence,
+                'method': extraction_result.method,
+                'pages': f"{extraction_result.pages_extracted}/{extraction_result.total_pages}"
+            },
+            'anonymization': {
+                'anonymized_text': anonymized_text,
+                'pii_stats': pii_stats,
+                'k_anonymity': anonymity_metrics.get('k_anonymity', 0),
+                'l_diversity': anonymity_metrics.get('l_diversity', 0),
+                't_closeness': anonymity_metrics.get('t_closeness', 0)
+            },
+            'summarization': {
+                'summary': summary_result.get('summary', '') or summary_result.get('text', ''),
+                'key_findings': key_findings,
+                'compression_ratio': summary_result.get('compression_ratio', 0)
+            },
+            'compliance': compliance_result
+        }
+    
+    except Exception as e:
+        logger.error(f"[SYNC] Processing error: {str(e)}", exc_info=True)
+        return {
+            'success': False,
+            'error': f"Processing error: {str(e)}",
+            'stage': 'processing'
+        }
 
 @app.route('/api/submissions/<submission_id>/status', methods=['GET'])
 @jwt_required()
 def get_status(submission_id):
-    """Get submission processing status"""
+    """Get submission processing status - supports both sync and async modes
+    
+    Returns current status and progress for async tasks
+    """
     try:
         conn = sqlite3.connect('submissions.db')
         c = conn.cursor()
@@ -481,23 +703,69 @@ def get_status(submission_id):
         if not row:
             return jsonify({"error": "Submission not found"}), 404
         
-        # Unpack the row (18 columns now with key_findings)
+        # Get database record (26 columns after adding extraction metadata)
         (id_, filename, orig_filename, sub_type, status, file_path, file_size, 
          created_at, proc_start, proc_end, proc_duration, ext_text, anon_text, 
-         summary, key_findings_str, pii_stats, compliance, error_msg) = row
+         summary, key_findings_str, pii_stats, compliance, 
+         ext_quality, ext_confidence, ext_method, ext_pages,
+         anon_k, anon_l, anon_t, error_msg) = row
         
-        return jsonify({
+        response = {
             "submission_id": submission_id,
             "status": status,
             "filename": orig_filename,
             "created_at": created_at,
             "processing_duration": proc_duration,
-            "current_stage": "completed" if status == "completed" else "processing"
-        }), 200
+            "current_stage": _map_status_to_stage(status)
+        }
+        
+        # Check async task status if processing
+        if celery and status in ['pending', 'extracting_text', 'anonymizing', 'summarizing', 'validating_compliance']:
+            try:
+                from celery.result import AsyncResult
+                task_id = f"process_{submission_id}"
+                task_result = AsyncResult(task_id, app=celery)
+                
+                response['async_mode'] = True
+                response['task_status'] = task_result.status
+                response['task_progress'] = task_result.info if task_result.info else {}
+                
+                # Update status from task if state changed
+                if task_result.state == 'SUCCESS':
+                    response['status'] = 'completed'
+                elif task_result.state == 'FAILURE':
+                    response['status'] = 'failed'
+                    response['error'] = str(task_result.info)
+                
+            except Exception as e:
+                logger.warning(f"Could not check async task status: {str(e)}")
+                response['async_mode'] = False
+        else:
+            response['async_mode'] = False
+        
+        # Add error if processing failed
+        if status == 'failed' and error_msg:
+            response['error'] = error_msg
+        
+        return jsonify(response), 200
         
     except Exception as e:
-        print(f"❌ Status check error: {str(e)}")
+        logger.error(f"[STATUS] Error checking status: {str(e)}")
         return jsonify({"error": str(e)}), 500
+
+
+def _map_status_to_stage(status):
+    """Map database status to processing stage"""
+    stage_map = {
+        'pending': 'queued',
+        'extracting_text': 'extracting',
+        'anonymizing': 'anonymizing',
+        'summarizing': 'summarizing',
+        'validating_compliance': 'validating',
+        'completed': 'completed',
+        'failed': 'failed'
+    }
+    return stage_map.get(status, 'unknown')
 
 @app.route('/api/submissions/<submission_id>/results', methods=['GET'])
 @jwt_required()
@@ -513,10 +781,12 @@ def get_results(submission_id):
         if not row:
             return jsonify({"error": "Submission not found"}), 404
         
-        # Unpack the row (18 columns with key_findings)
+        # Unpack all 26 columns
         (id_, filename, orig_filename, sub_type, status, file_path, file_size, 
          created_at, proc_start, proc_end, proc_duration, ext_text, anon_text, 
-         summary, key_findings_str, pii_stats_str, compliance_str, error_msg) = row
+         summary, key_findings_str, pii_stats_str, compliance_str,
+         ext_quality, ext_confidence, ext_method, ext_pages,
+         anon_k, anon_l, anon_t, error_msg) = row
         
         pii_stats = json.loads(pii_stats_str) if pii_stats_str else {}
         compliance = json.loads(compliance_str) if compliance_str else {}
@@ -528,13 +798,25 @@ def get_results(submission_id):
             "filename": orig_filename,
             "summary": summary or "Document processed",
             "pii_stats": pii_stats,
+            "key_findings": key_findings if key_findings else [],
             "anonymized_text": (anon_text[:2000] + "...") if anon_text and len(anon_text) > 2000 else anon_text,
-            "key_findings": key_findings if key_findings else ["No specific findings extracted from document"],
-            "compliance_status": compliance
+            "extraction": {
+                "quality": ext_quality or "unknown",
+                "confidence": ext_confidence or 0,
+                "method": ext_method or "unknown",
+                "pages": ext_pages or "0/0"
+            },
+            "anonymization": {
+                "pii_stats": pii_stats,
+                "k_anonymity": anon_k or 0,
+                "l_diversity": anon_l or 0,
+                "t_closeness": anon_t or 0
+            },
+            "compliance": compliance
         }), 200
         
     except Exception as e:
-        print(f"❌ Results retrieval error: {str(e)}")
+        logger.error(f"Results retrieval error: {str(e)}")
         return jsonify({"error": str(e)}), 500
 
 @app.route('/api/submissions', methods=['GET'])

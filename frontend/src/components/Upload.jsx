@@ -69,24 +69,29 @@ export default function Upload({ onUploadSuccess }) {
     setSuccess('');
 
     try {
-      const formData = new FormData();
-      formData.append('file', file);
-      formData.append('type', docType);
-
       const response = await submissionAPI.uploadFile(file, docType);
-      const { submission_id, message } = response.data;
+      const { submission_id, message, async_mode } = response.data;
 
-      setSuccess(`${message} (ID: ${submission_id})`);
-      setFile(null);
-
-      // Notify parent component
-      if (onUploadSuccess) {
-        onUploadSuccess(submission_id);
+      if (async_mode) {
+        setSuccess(`${message}\nRedirecting to results...`);
+      } else {
+        setSuccess(`${message}\nRedirecting to results...`);
       }
+      
+      setFile(null);
 
       // Reset form
       document.querySelector('input[type="file"]').value = '';
       setDocType('form_44');
+
+      // Redirect to results page after 1.5 seconds
+      setTimeout(() => {
+        if (onUploadSuccess) {
+          onUploadSuccess(submission_id);
+        }
+        window.location.href = `/results/${submission_id}`;
+      }, 1500);
+      
     } catch (err) {
       setError(err.response?.data?.error || err.message || 'Upload failed');
     } finally {

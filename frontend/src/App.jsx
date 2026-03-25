@@ -24,8 +24,8 @@ function App() {
   const { setToken } = useAuthStore();
 
   useEffect(() => {
-    // Initialize auth from localStorage
-    const token = localStorage.getItem('auth_token');
+    // Initialize auth from localStorage with correct key
+    const token = localStorage.getItem('access_token');
     if (token) {
       setToken(token);
     }
