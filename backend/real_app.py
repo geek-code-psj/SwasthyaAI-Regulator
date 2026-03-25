@@ -56,6 +56,7 @@ def init_db():
         extracted_text TEXT,
         anonymized_text TEXT,
         summary TEXT,
+        key_findings TEXT,
         pii_stats TEXT,
         compliance_result TEXT,
         error_message TEXT
@@ -440,12 +441,12 @@ def upload_file():
                      (id, filename, original_filename, submission_type, status, file_path, 
                       file_size, created_at, processing_start_date, processing_end_date, 
                       processing_duration, extracted_text, anonymized_text, summary, 
-                      pii_stats, compliance_result)
-                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
+                      key_findings, pii_stats, compliance_result)
+                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
                   (submission_id, filename, file.filename, submission_type, 'completed',
                    file_path, file_size, datetime.utcnow(), datetime.utcnow(), 
                    datetime.utcnow(), 2.5, extracted_text, anonymized_text, 
-                   summary, json.dumps(pii_stats), json.dumps(compliance_result)))
+                   summary, json.dumps(key_findings), json.dumps(pii_stats), json.dumps(compliance_result)))
         conn.commit()
         conn.close()
         
@@ -480,10 +481,10 @@ def get_status(submission_id):
         if not row:
             return jsonify({"error": "Submission not found"}), 404
         
-        # Unpack the row (17 columns)
+        # Unpack the row (18 columns now with key_findings)
         (id_, filename, orig_filename, sub_type, status, file_path, file_size, 
          created_at, proc_start, proc_end, proc_duration, ext_text, anon_text, 
-         summary, pii_stats, compliance, error_msg) = row
+         summary, key_findings_str, pii_stats, compliance, error_msg) = row
         
         return jsonify({
             "submission_id": submission_id,
@@ -512,13 +513,14 @@ def get_results(submission_id):
         if not row:
             return jsonify({"error": "Submission not found"}), 404
         
-        # Unpack the row (17 columns)
+        # Unpack the row (18 columns with key_findings)
         (id_, filename, orig_filename, sub_type, status, file_path, file_size, 
          created_at, proc_start, proc_end, proc_duration, ext_text, anon_text, 
-         summary, pii_stats_str, compliance_str, error_msg) = row
+         summary, key_findings_str, pii_stats_str, compliance_str, error_msg) = row
         
         pii_stats = json.loads(pii_stats_str) if pii_stats_str else {}
         compliance = json.loads(compliance_str) if compliance_str else {}
+        key_findings = json.loads(key_findings_str) if key_findings_str else []
         
         return jsonify({
             "submission_id": submission_id,
@@ -527,12 +529,7 @@ def get_results(submission_id):
             "summary": summary or "Document processed",
             "pii_stats": pii_stats,
             "anonymized_text": (anon_text[:2000] + "...") if anon_text and len(anon_text) > 2000 else anon_text,
-            "key_findings": [
-                f"Detected {sum(pii_stats.values())} PII items" if pii_stats else "No PII detected",
-                "All personally identifiable information anonymized",
-                "Document complies with DPDP Act 2023 requirements",
-                "Health data formatted according to NDHM standards"
-            ],
+            "key_findings": key_findings if key_findings else ["No specific findings extracted from document"],
             "compliance_status": compliance
         }), 200
         
