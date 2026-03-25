@@ -13,6 +13,11 @@ from datetime import datetime, timedelta
 import json
 import sqlite3
 from pathlib import Path
+import fitz  # PyMuPDF for PDF text extraction
+import pytesseract  # OCR for scanned PDFs
+from PIL import Image
+import pdfplumber
+import io
 
 # Initialize Flask
 app = Flask(__name__)
@@ -80,13 +85,130 @@ class RealTextProcessor:
     
     @staticmethod
     def extract_text(file_path):
-        """Extract text from uploaded file"""
+        """Hybrid PDF/Image extraction using PyMuPDF + OCR fallback
+        
+        PIPELINE:
+        1. If PDF → Try PyMuPDF (fast, for text PDFs)
+        2. If no text → Try OCR with Tesseract
+        3. If image → Direct OCR
+        4. Clean and return text
+        """
+        import logging
+        logger = logging.getLogger(__name__)
+        
         try:
-            with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
-                text = f.read()
-            return text if text.strip() else "Empty file or binary content"
+            file_ext = Path(file_path).suffix.lower()
+            
+            # ============ PDF EXTRACTION ============
+            if file_ext == '.pdf':
+                logger.info(f"[PDF] Extracting from PDF: {file_path}")
+                
+                # STRATEGY 1: Try PyMuPDF first (fast for text PDFs)
+                text = RealTextProcessor._extract_pdf_pymupdf(file_path)
+                
+                # STRATEGY 2: If minimal text, use OCR (for scanned PDFs)
+                if not text or len(text.strip()) < 100:
+                    logger.warning(f"[PDF] PyMuPDF extracted minimal text, trying OCR...")
+                    text = RealTextProcessor._extract_pdf_ocr(file_path)
+                
+                if text.strip():
+                    logger.info(f"[PDF] ✓ Extracted {len(text)} characters")
+                    return text
+                else:
+                    logger.warning("[PDF] ⚠ No text extracted from PDF")
+                    return "Unable to extract text from PDF - possible scanned document"
+            
+            # ============ IMAGE EXTRACTION (OCR) ============
+            elif file_ext in ['.jpg', '.jpeg', '.png', '.tiff', '.tif']:
+                logger.info(f"[IMAGE] Extracting from image using OCR: {file_path}")
+                text = RealTextProcessor._extract_image_ocr(file_path)
+                
+                if text.strip():
+                    logger.info(f"[IMAGE] ✓ Extracted {len(text)} characters")
+                    return text
+                else:
+                    logger.warning("[IMAGE] ⚠ No text extracted from image")
+                    return "Unable to extract text from image - image may be blank or unreadable"
+            
+            # ============ PLAIN TEXT ============
+            else:
+                logger.info(f"[TEXT] Extracting from text file: {file_path}")
+                with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
+                    text = f.read()
+                return text if text.strip() else "Empty file"
+                
         except Exception as e:
-            return f"Error reading file: {str(e)}"
+            logger.error(f"[EXTRACT] Error: {str(e)}")
+            return f"Error extracting text: {str(e)}"
+    
+    @staticmethod
+    def _extract_pdf_pymupdf(file_path):
+        """Extract text from PDF using PyMuPDF (fast for text PDFs)"""
+        import logging
+        logger = logging.getLogger(__name__)
+        
+        try:
+            text = ""
+            doc = fitz.open(file_path)
+            
+            for page_num, page in enumerate(doc):
+                page_text = page.get_text()
+                text += page_text + "\n"
+            
+            doc.close()
+            logger.info(f"[PDF-PYMUPDF] Extracted from {len(doc)} pages")
+            return text
+            
+        except Exception as e:
+            logger.warning(f"[PDF-PYMUPDF] Failed: {str(e)}")
+            return ""
+    
+    @staticmethod
+    def _extract_pdf_ocr(file_path):
+        """Extract text from PDF using OCR (for scanned PDFs)"""
+        import logging
+        logger = logging.getLogger(__name__)
+        
+        try:
+            doc = fitz.open(file_path)
+            text = ""
+            
+            for page_num, page in enumerate(doc):
+                # Render page to image
+                pix = page.get_pixmap(matrix=fitz.Matrix(2, 2))  # 2x zoom for better OCR
+                img_data = pix.tobytes("ppm")
+                img = Image.open(io.BytesIO(img_data))
+                
+                # Extract text using OCR
+                page_text = pytesseract.image_to_string(img)
+                text += page_text + "\n"
+                
+                if page_num == 0:
+                    logger.debug(f"[PDF-OCR] OCR page 1 extracted {len(page_text)} chars")
+            
+            doc.close()
+            logger.info(f"[PDF-OCR] OCR extraction complete")
+            return text
+            
+        except Exception as e:
+            logger.warning(f"[PDF-OCR] OCR failed: {str(e)}")
+            return ""
+    
+    @staticmethod
+    def _extract_image_ocr(file_path):
+        """Extract text from image using OCR"""
+        import logging
+        logger = logging.getLogger(__name__)
+        
+        try:
+            img = Image.open(file_path)
+            text = pytesseract.image_to_string(img)
+            logger.info(f"[IMAGE-OCR] Extracted {len(text)} characters")
+            return text
+            
+        except Exception as e:
+            logger.warning(f"[IMAGE-OCR] Failed: {str(e)}")
+            return ""
     
     @staticmethod
     def detect_pii(text):
