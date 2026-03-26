@@ -49,20 +49,26 @@ export default function DashboardPage() {
   };
 
   const getStatusBadge = (status) => {
+    // Normalize old status formats to new ones
+    let normalizedStatus = status;
+    if (status === 'pass') normalizedStatus = 'completed';
+    if (status === 'fail') normalizedStatus = 'failed';
+    
     const statusConfig = {
-      completed: { icon: CheckCircle, color: 'bg-green-100 text-green-800' },
-      processing: { icon: Clock, color: 'bg-blue-100 text-blue-800' },
-      failed: { icon: AlertCircle, color: 'bg-red-100 text-red-800' },
-      pending: { icon: Clock, color: 'bg-yellow-100 text-yellow-800' },
+      completed: { icon: CheckCircle, color: 'bg-green-100 text-green-800', label: 'Completed' },
+      processing: { icon: Clock, color: 'bg-blue-100 text-blue-800', label: 'Processing' },
+      failed: { icon: AlertCircle, color: 'bg-red-100 text-red-800', label: 'Failed' },
+      pending: { icon: Clock, color: 'bg-yellow-100 text-yellow-800', label: 'Pending' },
+      uploaded: { icon: Clock, color: 'bg-gray-100 text-gray-800', label: 'Uploaded' },
     };
 
-    const config = statusConfig[status] || statusConfig.pending;
+    const config = statusConfig[normalizedStatus] || statusConfig.pending;
     const Icon = config.icon;
 
     return (
       <span className={`badge ${config.color}`}>
         <Icon className="w-3 h-3 inline mr-1" />
-        {status}
+        {config.label}
       </span>
     );
   };
@@ -238,7 +244,7 @@ export default function DashboardPage() {
                             </td>
                             <td className="px-6 py-4 text-sm">
                               <div className="flex items-center space-x-2">
-                                {submission.status === 'completed' && (
+                                {(submission.status === 'completed' || submission.status === 'pass') && (
                                   <>
                                     <button
                                       onClick={() => navigate(`/submission/${submission.id}/results`)}
@@ -256,7 +262,7 @@ export default function DashboardPage() {
                                     </button>
                                   </>
                                 )}
-                                {submission.status === 'processing' && (
+                                {(submission.status === 'processing' || submission.status === 'uploaded') && (
                                   <button
                                     onClick={() => navigate(`/submission/${submission.id}/status`)}
                                     className="p-2 hover:bg-yellow-100 text-yellow-600 rounded-lg transition-colors animate-pulse"

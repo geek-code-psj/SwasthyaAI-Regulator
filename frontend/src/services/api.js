@@ -53,11 +53,14 @@ export const submissionAPI = {
     return apiClient.post('/submissions/upload', formData);
   },
 
+  extractForm44: (submissionId) =>
+    apiClient.post(`/submissions/${submissionId}/extract-form44`),
+
   getStatus: (submissionId) =>
     apiClient.get(`/submissions/${submissionId}/status`),
 
-  processSubmission: (submissionId) =>
-    apiClient.post(`/submissions/${submissionId}/process`),
+  processSubmission: (submissionId, submissionData = {}) =>
+    apiClient.post(`/submissions/${submissionId}/process`, { submission_data: submissionData }),
 
   getResults: (submissionId) =>
     apiClient.get(`/submissions/${submissionId}/results`),

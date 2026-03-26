@@ -17,10 +17,11 @@ import Sidebar from '../components/Sidebar';
 import { submissionAPI } from '../services/api';
 
 const processingStages = [
-  { id: 'extracting_text', label: 'OCR Extraction', icon: Zap, duration: '5-10s' },
-  { id: 'anonymizing', label: 'Anonymization', icon: Shield, duration: '2-3s' },
-  { id: 'summarizing', label: 'Summarization', icon: CheckCircle, duration: '10-15s' },
-  { id: 'validating_compliance', label: 'Compliance Validation', icon: Award, duration: '1-2s' },
+  { id: 'uploaded', label: 'Uploaded', icon: Zap, duration: '1-2s' },
+  { id: 'validating_duplicates', label: 'Duplicate Detection', icon: Shield, duration: '2-3s' },
+  { id: 'validating_consistency', label: 'Consistency Check', icon: CheckCircle, duration: '3-5s' },
+  { id: 'validating_form', label: 'Form Validation', icon: Award, duration: '2-3s' },
+  { id: 'completed', label: 'Completed', icon: CheckCircle, duration: '1s' },
 ];
 
 export default function ProcessingStatusPage() {
@@ -30,19 +31,40 @@ export default function ProcessingStatusPage() {
   const [submission, setSubmission] = useState(null);
   const [loading, setLoading] = useState(true);
   const [autoRefresh, setAutoRefresh] = useState(true);
+  const [processing, setProcessing] = useState(false);
+  const [processAttempted, setProcessAttempted] = useState(false);
+  const [extractedFormData, setExtractedFormData] = useState(null);
+  const [extracting, setExtracting] = useState(false);
 
   useEffect(() => {
     fetchStatus();
-    const interval = autoRefresh ? setInterval(fetchStatus, 3000) : null;
+    const interval = autoRefresh ? setInterval(fetchStatus, 2000) : null;
     return () => {
       if (interval) clearInterval(interval);
     };
   }, [id, autoRefresh]);
 
+  // Auto-trigger extraction and processing when uploaded status is detected
+  useEffect(() => {
+    if (submission && submission.status === 'uploaded' && !processAttempted && !processing && !extracting) {
+      setProcessAttempted(true);
+      extractAndProcess();
+    }
+  }, [submission, processAttempted, processing, extracting]);
+
   const fetchStatus = async () => {
     try {
       const response = await submissionAPI.getStatus(id);
       const data = response.data;
+      
+      // Normalize status values for backwards compatibility
+      // Convert old format (pass/fail) to new format (completed/failed)
+      if (data.status === 'pass') {
+        data.status = 'completed';
+      } else if (data.status === 'fail') {
+        data.status = 'failed';
+      }
+      
       setSubmission(data);
 
       // Stop auto-refresh when completed or failed
@@ -58,16 +80,105 @@ export default function ProcessingStatusPage() {
     }
   };
 
+  const extractAndProcess = async () => {
+    if (extracting || processing || !submission || submission.status !== 'uploaded') return;
+    
+    setExtracting(true);
+    try {
+      // Step 1: Extract Form 44 data from PDF
+      console.log('Extracting Form 44 data from PDF...');
+      const extractResponse = await submissionAPI.extractForm44(id);
+      
+      if (extractResponse.status === 200) {
+        const formData = extractResponse.data.form44_data;
+        setExtractedFormData(formData);
+        console.log('✓ Form 44 data extracted:', formData);
+        
+        // Step 2: Process with extracted data
+        setExtracting(false);
+        await triggerProcessingWithData(formData);
+      }
+    } catch (error) {
+      console.warn('Form extraction not available, processing without extracted data:', error);
+      setExtracting(false);
+      // Fall back to processing without extracted data
+      await triggerProcessing();
+    }
+  };
+
+  const triggerProcessingWithData = async (formData) => {
+    if (processing || !submission) return;
+    
+    setProcessing(true);
+    try {
+      const response = await submissionAPI.processSubmission(id, { form_data: formData });
+      if (response.status === 200) {
+        toast.success('Processing started with extracted Form 44 data!');
+        await fetchStatus();
+      }
+    } catch (error) {
+      const errorMsg = error.response?.data?.error || error.message || 'Failed to process submission';
+      toast.error(errorMsg);
+      console.error('Processing error:', error);
+    } finally {
+      setProcessing(false);
+    }
+  };
+
+  const triggerProcessing = async () => {
+    if (processing || !submission || submission.status !== 'uploaded') return;
+    
+    setProcessing(true);
+    try {
+      const response = await submissionAPI.processSubmission(id);
+      if (response.status === 200) {
+        toast.success('Processing started!');
+        // Refresh immediately to see updated status
+        await fetchStatus();
+      }
+    } catch (error) {
+      const errorMsg = error.response?.data?.error || error.message || 'Failed to process submission';
+      toast.error(errorMsg);
+      console.error('Processing error:', error);
+    } finally {
+      setProcessing(false);
+    }
+  };
+
   const getCurrentStage = () => {
     if (!submission) return 0;
-    return processingStages.findIndex((s) => s.id === submission.status) + 1;
+    const status = submission.status;
+    
+    // Map actual statuses to progress
+    if (status === 'completed' || status === 'pass') return processingStages.length;
+    if (status === 'failed' || status === 'fail') return 0;
+    
+    const stageIdx = processingStages.findIndex((s) => s.id === status);
+    return stageIdx >= 0 ? stageIdx + 1 : 1; // Default to 1 if status not recognized
   };
 
   const isStageCompleted = (stageId) => {
     if (!submission) return false;
-    const currentIdx = processingStages.findIndex((s) => s.id === submission.status);
+    const status = submission.status;
+    
+    // When failed, all stages except the final one are "completed", but final stage failed
+    if (status === 'failed' || status === 'fail') {
+      // All stages before "completed" stage
+      if (stageId !== 'completed') {
+        return true; // All intermediate stages completed
+      }
+      return false; // Final stage failed
+    }
+    
+    // When completed, all stages are completed
+    if (status === 'completed' || status === 'pass') {
+      return true;
+    }
+    
+    // For other statuses (in progress), show stages that have been completed
+    const currentIdx = processingStages.findIndex((s) => s.id === status);
     const stageIdx = processingStages.findIndex((s) => s.id === stageId);
-    return stageIdx < currentIdx || submission.status === 'completed';
+    return stageIdx < currentIdx;
   };
 
   const isStageInProgress = (stageId) => {
@@ -77,9 +188,14 @@ export default function ProcessingStatusPage() {
 
   const getProgressPercentage = () => {
     if (!submission) return 0;
-    if (submission.status === 'completed') return 100;
-    if (submission.status === 'failed') return 0;
-    return ((getCurrentStage() - 1) / processingStages.length) * 100;
+    const status = submission.status;
+    
+    if (status === 'completed' || status === 'pass') return 100;
+    // Show 80% progress for failed - indicates most checks ran but one failed
+    if (status === 'failed' || status === 'fail') return 80;
+    
+    const stage = getCurrentStage();
+    return Math.max(0, (stage - 1) / processingStages.length * 100);
   };
 
   if (loading) {
@@ -135,13 +251,13 @@ export default function ProcessingStatusPage() {
                     </p>
                   </div>
                   <div>
-                    {submission?.status === 'completed' && (
+                    {(submission?.status === 'completed' || submission?.status === 'pass') && (
                       <span className="badge badge-success">✓ Completed</span>
                     )}
-                    {submission?.status === 'failed' && (
+                    {(submission?.status === 'failed' || submission?.status === 'fail') && (
                       <span className="badge badge-error">✗ Failed</span>
                     )}
-                    {submission?.status !== 'completed' && submission?.status !== 'failed' && (
+                    {submission?.status !== 'completed' && submission?.status !== 'failed' && submission?.status !== 'pass' && submission?.status !== 'fail' && (
                       <span className="badge badge-info animate-pulse">◉ Processing</span>
                     )}
                   </div>
@@ -163,6 +279,36 @@ export default function ProcessingStatusPage() {
                       ></div>
                     </div>
                   </div>
+
+                  {/* Process Now Button - Show only if uploaded and not processing */}
+                  {submission?.status === 'uploaded' && (
+                    <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4 flex items-center justify-between">
+                      <div className="flex items-center space-x-3">
+                        <AlertCircle className="w-5 h-5 text-yellow-600" />
+                        <div>
+                          <p className="font-semibold text-yellow-900">Ready to Process</p>
+                          <p className="text-sm text-yellow-700">Click the button to extract Form 44 data and start processing</p>
+                        </div>
+                      </div>
+                      <button
+                        onClick={extractAndProcess}
+                        disabled={processing || extracting}
+                        className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex items-center space-x-2"
+                      >
+                        {processing || extracting ? (
+                          <>
+                            <span className="animate-spin">⟳</span>
+                            <span>{extracting ? 'Extracting...' : 'Processing...'}</span>
+                          </>
+                        ) : (
+                          <>
+                            <Zap className="w-4 h-4" />
+                            <span>Process Now</span>
+                          </>
+                        )}
+                      </button>
+                    </div>
+                  )}
 
                   {/* Processing Stages */}
                   <div>
@@ -225,6 +371,25 @@ export default function ProcessingStatusPage() {
                       })}
                     </div>
                   </div>
+
+                  {/* Extracted Form Data */}
+                  {extractedFormData && Object.keys(extractedFormData).length > 0 && (
+                    <div className="bg-blue-50 rounded-lg p-4 space-y-3 border-l-4 border-blue-500">
+                      <h3 className="font-semibold text-gray-900 flex items-center space-x-2">
+                        <span>✓ Extracted Form 44 Data</span>
+                      </h3>
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                        {Object.entries(extractedFormData).map(([key, value]) => (
+                          <div key={key} className="bg-white rounded p-3 border border-blue-100">
+                            <p className="text-xs text-gray-600 uppercase font-semibold">{key.replace(/_/g, ' ')}</p>
+                            <p className="font-medium text-gray-900 mt-1 break-words">
+                              {value ? String(value) : '—'}
+                            </p>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
 
                   {/* Submission Details */}
                   <div className="bg-gray-50 rounded-lg p-4 space-y-3">

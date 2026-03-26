@@ -1,53 +1,80 @@
-# SwasthyaAI Regulator - Quick Start Guide
+# 🚀 Quick Start Guide - SwasthyaAI Regulator
 
-Get the application running in 5 minutes!
-
-## Option 1: Quick Start (Recommended for Development)
+## Get Started in 5 Minutes
 
 ### Prerequisites
-- Python 3.9+
-- PostgreSQL (installed and running)
-- Git
+- Python 3.8+
+- PostgreSQL 12+
+- pip installed
 
-### Steps
+---
 
-1. **Clone and Setup**
+## Step 1: Install Dependencies (1 minute)
+
 ```bash
-cd "c:\Users\email\OneDrive\Desktop\SwasthyaAI Regulator"
-python -m venv venv
-venv\Scripts\activate  # Windows
-# or: source venv/bin/activate  # Linux/Mac
-```
-
-2. **Install Dependencies**
-```bash
+cd "SwasthyaAI Regulator"
 pip install -r requirements.txt
 ```
 
-3. **Configure Environment**
+**Required packages automatically installed:**
+- Flask & Flask-SQLAlchemy
+- psycopg2-binary (PostgreSQL)
+- cryptography (encryption)
+- requests (API testing)
+
+---
+
+## Step 2: Setup Database (2 minutes)
+
 ```bash
-copy .env.example .env
-# Edit .env with your database credentials
+cd backend
+python setup_database.py
 ```
 
-4. **Initialize Database**
+**What this does:**
+✓ Checks PostgreSQL is installed
+✓ Tests database connection
+✓ Creates 8 tables + 3 views
+✓ Initializes audit trail triggers
+✓ Verifies everything works
+
+---
+
+## Step 3: Start Flask App (< 1 minute)
+
 ```bash
-python init_db.py
+python integrated_app.py
 ```
 
-5. **Run the Server**
-```bash
-python -m flask run
+**You should see:**
+```
+[...] INFO: SwasthyaAI Regulator - CDSCO Skeleton Backend
+[...] INFO: ✓ Database: postgresql://...
+[...] INFO: Starting Flask development server...
+WARNING: Running on http://127.0.0.1:5000
 ```
 
-Access the API at: **http://localhost:5000**
+---
 
-Test health: **http://localhost:5000/api/health**
+## Step 4: Test the System (1 minute)
 
-## Option 2: Docker Setup (Recommended for Production)
+**In a new terminal:**
 
-### Prerequisites
-- Docker
+```bash
+cd backend
+python validate_system.py
+```
+
+**Expected result:**
+```
+✓ ALL TESTS PASSED (10/10)
+```
+
+---
+
+## 🎉 You're Done!
+
+Your system is now running with:
 - Docker Compose
 
 ### Steps
