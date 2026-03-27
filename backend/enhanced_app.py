@@ -9,7 +9,7 @@ Integrated with:
 ✅ Full Audit Trail
 """
 
-from flask import Flask, request, jsonify, make_response
+from flask import Flask, request, jsonify, make_response, send_file
 from flask_cors import CORS
 from flask_jwt_extended import JWTManager, create_access_token, jwt_required, get_jwt_identity
 from flask_sqlalchemy import SQLAlchemy
@@ -2401,5 +2401,412 @@ if __name__ == '__main__':
     logger.info("  [PASS] Evidence-Based Naranjo Scoring")
     logger.info("  [PASS] Comprehensive Submission Review")
     logger.info("=" * 70)
+
+# ============================================================================
+# ANALYTICS & REPORTING ENDPOINTS
+# ============================================================================
+
+@app.route('/api/analytics/summary', methods=['GET'])
+def get_analytics_summary():
+    """Get summary analytics for dashboard"""
+    try:
+        # Query all submissions
+        submissions = Submission.query.all()
+        results = ValidationResult.query.all()
+        
+        total_submissions = len(submissions)
+        passed_submissions = len([s for s in submissions if s.status in ['completed', 'approved']])
+        pass_rate = (passed_submissions / total_submissions * 100) if total_submissions > 0 else 0
+        
+        # Calculate severity distribution
+        severity_data = {'Mild': 0, 'Moderate': 0, 'Severe': 0, 'Life-threatening': 0}
+        outcome_data = {'Recovered': 0, 'Recovering': 0, 'Not Recovered': 0, 'Unknown': 0, 'Fatal': 0}
+        
+        for submission in submissions:
+            # Parse validation results for severity/outcome data
+            sub_results = ValidationResult.query.filter_by(submission_id=submission.id).all()
+            for result in sub_results:
+                try:
+                    result_json = json.loads(result.result) if isinstance(result.result, str) else result.result
+                    if isinstance(result_json, dict):
+                        if 'severity_distribution' in result_json:
+                            for severity, count in result_json['severity_distribution'].items():
+                                if severity in severity_data:
+                                    severity_data[severity] += count
+                        if 'outcome_distribution' in result_json:
+                            for outcome, count in result_json['outcome_distribution'].items():
+                                if outcome in outcome_data:
+                                    outcome_data[outcome] += count
+                except:
+                    pass
+        
+        return jsonify({
+            'total_submissions': total_submissions,
+            'passed_submissions': passed_submissions,
+            'pass_rate': round(pass_rate, 2),
+            'severity_distribution': severity_data,
+            'outcome_distribution': outcome_data,
+            'timestamp': datetime.utcnow().isoformat()
+        }), 200
+        
+    except Exception as e:
+        logger.error(f"Analytics summary error: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/analytics/top-adverse-events', methods=['GET'])
+def get_top_adverse_events():
+    """Get top adverse events from submissions"""
+    try:
+        submissions = Submission.query.all()
+        adverse_events = {}
+        
+        for submission in submissions:
+            results = ValidationResult.query.filter_by(submission_id=submission.id).all()
+            for result in results:
+                try:
+                    result_json = json.loads(result.result) if isinstance(result.result, str) else result.result
+                    if isinstance(result_json, dict) and 'adverse_events' in result_json:
+                        for event in result_json['adverse_events']:
+                            adverse_events[event] = adverse_events.get(event, 0) + 1
+                except:
+                    pass
+        
+        # Get top 5
+        top_events = sorted(adverse_events.items(), key=lambda x: x[1], reverse=True)[:5]
+        
+        return jsonify({
+            'top_adverse_events': [{'event': event, 'count': count} for event, count in top_events],
+            'timestamp': datetime.utcnow().isoformat()
+        }), 200
+        
+    except Exception as e:
+        logger.error(f"Top adverse events error: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/analytics/top-drugs', methods=['GET'])
+def get_top_drugs():
+    """Get top drugs causing adverse reactions"""
+    try:
+        submissions = Submission.query.all()
+        drugs = {}
+        
+        for submission in submissions:
+            results = ValidationResult.query.filter_by(submission_id=submission.id).all()
+            for result in results:
+                try:
+                    result_json = json.loads(result.result) if isinstance(result.result, str) else result.result
+                    if isinstance(result_json, dict) and 'drugs' in result_json:
+                        for drug in result_json['drugs']:
+                            drugs[drug] = drugs.get(drug, 0) + 1
+                except:
+                    pass
+        
+        # Get top 5
+        top_drugs = sorted(drugs.items(), key=lambda x: x[1], reverse=True)[:5]
+        
+        return jsonify({
+            'top_drugs': [{'drug': drug, 'count': count} for drug, count in top_drugs],
+            'timestamp': datetime.utcnow().isoformat()
+        }), 200
+        
+    except Exception as e:
+        logger.error(f"Top drugs error: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/analytics/form-types', methods=['GET'])
+def get_form_types_distribution():
+    """Get distribution of form types"""
+    try:
+        submissions = Submission.query.all()
+        form_types = {}
+        
+        for submission in submissions:
+            form_type = submission.submission_type or 'Unknown'
+            form_types[form_type] = form_types.get(form_type, 0) + 1
+        
+        return jsonify({
+            'form_type_distribution': form_types,
+            'timestamp': datetime.utcnow().isoformat()
+        }), 200
+        
+    except Exception as e:
+        logger.error(f"Form types error: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/reports/submission-summary/<submission_id>', methods=['GET'])
+def get_submission_report_data(submission_id):
+    """Get comprehensive data for a submission's report"""
+    try:
+        submission = Submission.query.filter_by(id=submission_id).first()
+        if not submission:
+            return jsonify({'error': 'Submission not found'}), 404
+        
+        results = ValidationResult.query.filter_by(submission_id=submission_id).all()
+        status_response = requests.get(f"http://localhost:5000/api/submissions/{submission_id}/results")
+        
+        if status_response.status_code == 200:
+            result_data = status_response.json()
+        else:
+            result_data = {}
+        
+        return jsonify({
+            'submission_id': submission_id,
+            'filename': submission.filename,
+            'created_at': submission.created_at.isoformat() if submission.created_at else None,
+            'status': submission.status,
+            'report_data': result_data,
+            'timestamp': datetime.utcnow().isoformat()
+        }), 200
+        
+    except Exception as e:
+        logger.error(f"Submission report data error: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/reports/export-pdf', methods=['POST'])
+def export_pdf_report():
+    """Export comprehensive PDF report with analytics summary"""
+    try:
+        from reportlab.lib.pagesizes import letter, A4
+        from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+        from reportlab.lib.units import inch
+        from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, PageBreak
+        from reportlab.lib import colors
+        from reportlab.lib.enums import TA_CENTER, TA_LEFT, TA_RIGHT
+        from io import BytesIO
+        from datetime import datetime
+        
+        # Get analytics data
+        submissions = Submission.query.all()
+        total_submissions = len(submissions)
+        
+        # Calculate statistics
+        passed_count = sum(1 for s in submissions if s.status == 'PASSED')
+        pass_rate = round((passed_count / total_submissions * 100), 2) if total_submissions > 0 else 0
+        
+        # Get severity and outcome distribution
+        severity_dist = {}
+        outcome_dist = {}
+        total_records = 0
+        
+        for submission in submissions:
+            results = ValidationResult.query.filter_by(submission_id=submission.id).all()
+            total_records += len(results)
+            for result in results:
+                try:
+                    result_json = json.loads(result.result) if isinstance(result.result, str) else result.result
+                    if isinstance(result_json, dict):
+                        severity = result_json.get('severity', 'Unknown')
+                        outcome = result_json.get('outcome', 'Unknown')
+                        severity_dist[severity] = severity_dist.get(severity, 0) + 1
+                        outcome_dist[outcome] = outcome_dist.get(outcome, 0) + 1
+                except:
+                    pass
+        
+        # Create PDF
+        buffer = BytesIO()
+        doc = SimpleDocTemplate(buffer, pagesize=letter,
+                                topMargin=0.5*inch, bottomMargin=0.5*inch,
+                                leftMargin=0.75*inch, rightMargin=0.75*inch)
+        
+        story = []
+        styles = getSampleStyleSheet()
+        
+        # Title
+        title_style = ParagraphStyle(
+            'CustomTitle',
+            parent=styles['Heading1'],
+            fontSize=24,
+            textColor=colors.HexColor('#2563eb'),
+            alignment=TA_CENTER,
+            spaceAfter=12
+        )
+        story.append(Paragraph("SwasthyaAI Regulator - Analytics Report", title_style))
+        
+        # Date
+        date_style = ParagraphStyle(
+            'DateStyle',
+            parent=styles['Normal'],
+            fontSize=10,
+            alignment=TA_CENTER,
+            textColor=colors.grey,
+            spaceAfter=20
+        )
+        story.append(Paragraph(f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}", date_style))
+        
+        # Summary section
+        story.append(Paragraph("Executive Summary", styles['Heading2']))
+        story.append(Spacer(1, 12))
+        
+        # Summary metrics table
+        summary_data = [
+            ['Metric', 'Value'],
+            ['Total Submissions', str(total_submissions)],
+            ['Passed Validations', str(passed_count)],
+            ['Pass Rate (%)', f"{pass_rate}%"],
+            ['Total Records Processed', str(total_records)]
+        ]
+        
+        summary_table = Table(summary_data, colWidths=[3*inch, 2*inch])
+        summary_table.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#2563eb')),
+            ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+            ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
+            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+            ('FONTSIZE', (0, 0), (-1, 0), 12),
+            ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
+            ('BACKGROUND', (0, 1), (-1, -1), colors.beige),
+            ('GRID', (0, 0), (-1, -1), 1, colors.black),
+            ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#f0f9ff')])
+        ]))
+        story.append(summary_table)
+        story.append(Spacer(1, 20))
+        
+        # Severity Distribution
+        story.append(Paragraph("Severity Distribution", styles['Heading2']))
+        story.append(Spacer(1, 10))
+        severity_data = [['Severity', 'Count']] + [[k, str(v)] for k, v in sorted(severity_dist.items())]
+        severity_table = Table(severity_data, colWidths=[3*inch, 2*inch])
+        severity_table.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#2563eb')),
+            ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+            ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
+            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+            ('GRID', (0, 0), (-1, -1), 1, colors.black),
+            ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#f0f9ff')])
+        ]))
+        story.append(severity_table)
+        story.append(Spacer(1, 20))
+        
+        # Outcome Distribution
+        story.append(Paragraph("Outcome Distribution", styles['Heading2']))
+        story.append(Spacer(1, 10))
+        outcome_data = [['Outcome', 'Count']] + [[k, str(v)] for k, v in sorted(outcome_dist.items())]
+        outcome_table = Table(outcome_data, colWidths=[3*inch, 2*inch])
+        outcome_table.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#2563eb')),
+            ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+            ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
+            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+            ('GRID', (0, 0), (-1, -1), 1, colors.black),
+            ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#f0f9ff')])
+        ]))
+        story.append(outcome_table)
+        story.append(Spacer(1, 20))
+        
+        # Footer
+        story.append(Spacer(1, 20))
+        footer_style = ParagraphStyle(
+            'Footer',
+            parent=styles['Normal'],
+            fontSize=8,
+            alignment=TA_CENTER,
+            textColor=colors.grey,
+            borderPadding=10
+        )
+        story.append(Paragraph("CDSCO Adverse Drug Reaction Reporting System &nbsp;|&nbsp; SwasthyaAI Regulator", footer_style))
+        
+        # Build PDF
+        doc.build(story)
+        buffer.seek(0)
+        
+        return send_file(
+            buffer,
+            mimetype='application/pdf',
+            as_attachment=True,
+            download_name=f"SwasthyaAI_Report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf"
+        )
+        
+    except Exception as e:
+        logger.error(f"PDF export error: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/reports/export-csv', methods=['POST'])
+def export_csv_report():
+    """Export analytics data as CSV file"""
+    try:
+        import csv
+        from io import StringIO
+        from datetime import datetime
+        
+        # Get analytics data
+        submissions = Submission.query.all()
+        
+        # Create CSV buffer
+        csv_buffer = StringIO()
+        writer = csv.writer(csv_buffer)
+        
+        # Write summary section
+        writer.writerow(['SwasthyaAI Regulator - Analytics Export'])
+        writer.writerow([f'Generated: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}'])
+        writer.writerow([])
+        
+        # Summary statistics
+        total_submissions = len(submissions)
+        passed_count = sum(1 for s in submissions if s.status == 'PASSED')
+        pass_rate = round((passed_count / total_submissions * 100), 2) if total_submissions > 0 else 0
+        
+        writer.writerow(['Summary Statistics'])
+        writer.writerow(['Metric', 'Value'])
+        writer.writerow(['Total Submissions', total_submissions])
+        writer.writerow(['Passed Validations', passed_count])
+        writer.writerow(['Pass Rate (%)', pass_rate])
+        writer.writerow([])
+        
+        # Severity distribution
+        severity_dist = {}
+        outcome_dist = {}
+        
+        for submission in submissions:
+            results = ValidationResult.query.filter_by(submission_id=submission.id).all()
+            for result in results:
+                try:
+                    result_json = json.loads(result.result) if isinstance(result.result, str) else result.result
+                    if isinstance(result_json, dict):
+                        severity = result_json.get('severity', 'Unknown')
+                        outcome = result_json.get('outcome', 'Unknown')
+                        severity_dist[severity] = severity_dist.get(severity, 0) + 1
+                        outcome_dist[outcome] = outcome_dist.get(outcome, 0) + 1
+                except:
+                    pass
+        
+        writer.writerow(['Severity Distribution'])
+        writer.writerow(['Severity', 'Count'])
+        for severity, count in sorted(severity_dist.items()):
+            writer.writerow([severity, count])
+        writer.writerow([])
+        
+        # Outcome distribution
+        writer.writerow(['Outcome Distribution'])
+        writer.writerow(['Outcome', 'Count'])
+        for outcome, count in sorted(outcome_dist.items()):
+            writer.writerow([outcome, count])
+        writer.writerow([])
+        
+        # Detailed submission records
+        writer.writerow(['Submission Records'])
+        writer.writerow(['Submission ID', 'Filename', 'Type', 'Status', 'Created Date'])
+        for submission in submissions:
+            created_date = submission.created_at.strftime('%Y-%m-%d %H:%M:%S') if submission.created_at else 'N/A'
+            writer.writerow([
+                submission.id,
+                submission.filename or 'N/A',
+                submission.submission_type or 'Unknown',
+                submission.status or 'Unknown',
+                created_date
+            ])
+        
+        # Prepare response
+        csv_buffer.seek(0)
+        
+        return send_file(
+            StringIO(csv_buffer.getvalue()),
+            mimetype='text/csv',
+            as_attachment=True,
+            download_name=f"SwasthyaAI_Export_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+        )
+        
+    except Exception as e:
+        logger.error(f"CSV export error: {e}")
+        return jsonify({'error': str(e)}), 500
     
     app.run(host='0.0.0.0', port=5000, debug=True)

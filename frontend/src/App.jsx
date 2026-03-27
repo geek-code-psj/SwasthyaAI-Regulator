@@ -6,6 +6,7 @@ import { HelmetProvider } from 'react-helmet-async';
 import { useAuthStore } from './stores';
 import LoginPage from './pages/Login';
 import DashboardPage from './pages/Dashboard';
+import Analytics from './pages/Analytics';
 import UploadPage from './pages/Upload';
 import ProcessingStatusPage from './pages/ProcessingStatus';
 import ResultsPage from './pages/Results';
@@ -52,6 +53,14 @@ function App() {
             element={
               <ProtectedRoute>
                 <UploadPage />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/analytics"
+            element={
+              <ProtectedRoute>
+                <Analytics />
               </ProtectedRoute>
             }
           />

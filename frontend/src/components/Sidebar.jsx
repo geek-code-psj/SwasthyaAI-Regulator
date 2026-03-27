@@ -8,6 +8,7 @@ import {
   Settings,
   HelpCircle,
   Shield,
+  BarChart3,
 } from 'lucide-react';
 
 export default function Sidebar({ isOpen }) {
@@ -25,6 +26,12 @@ export default function Sidebar({ isOpen }) {
       path: '/upload',
       icon: Upload,
       description: 'Process new document',
+    },
+    {
+      label: 'Analytics',
+      path: '/analytics',
+      icon: BarChart3,
+      description: 'View insights and reports',
     },
     {
       label: 'Compliance',
