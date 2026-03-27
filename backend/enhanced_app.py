@@ -680,7 +680,7 @@ def comprehensive_submission_review():
             review_report['checks_performed'].append({
                 'type': 'Consistency Check',
                 'status': consistency_result['overall_status'],
-                'critical_issues': len(consistency_result['critical_issues'])
+                'critical_issues': consistency_result['critical_issues']
             })
             if consistency_result['critical_issues']:
                 review_report['critical_issues'].extend(consistency_result['critical_issues'])
@@ -1174,7 +1174,7 @@ def process_submission(submission_id):
                         'status': 'PASS' if adr_result['overall_status'] == 'PASS' else 'FAIL',
                         'completeness': adr_result['completeness_score'],
                         'form_type': 'Form 44 - ADR',
-                        'critical_issues': len(adr_result['critical_issues'])
+                        'critical_issues': adr_result['critical_issues']
                     })
                     if adr_result['overall_status'] != 'PASS':
                         review_report['overall_status'] = 'FAIL'
