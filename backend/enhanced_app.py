@@ -925,61 +925,44 @@ def extract_form44_data(submission_id):
         extraction_quality = "low"
         extraction_error = None
 
-        # PRIMARY: Use hybrid PDF extractor for best results
+        # FAST EXTRACTION: Skip complex methods, use simple + fast approach
+        # Try PyMuPDF (FAST)
         try:
-            from modules.pdf_extractor import PDFExtractor
+            import fitz
+            doc = fitz.open(filepath)
+            extracted_text = ""
+            for page in doc:
+                extracted_text += page.get_text()
+            doc.close()
 
-            extraction_result = PDFExtractor.extract_document(filepath)
-
-            # CHECK 1: Verify extraction was successful
-            if extraction_result.error:
-                extraction_error = extraction_result.error
-                logger.warning(f"[EXTRACT] PDF extraction warning: {extraction_result.error}")
-
-            # CHECK 2: Validate minimum text length (prevent hallucination from empty/binary data)
-            if not extraction_result.text or len(extraction_result.text.strip()) < 100:
-                extraction_error = "Insufficient text extracted - PDF may be corrupted or binary"
-                extracted_text = ""
-                extraction_quality = "low"
+            if extracted_text and len(extracted_text.strip()) >= 100:
+                extraction_quality = "high"
+                logger.info(f"[EXTRACT] PyMuPDF extracted {len(extracted_text)} chars")
             else:
-                extracted_text = extraction_result.text
-                extraction_quality = extraction_result.extraction_quality
-                logger.info(f"[EXTRACT] ✓ Successfully extracted {len(extracted_text)} chars with quality: {extraction_quality}")
-
-        except ImportError:
-            logger.warning("[EXTRACT] PDF extractor module not available, trying fallback")
-            extracted_text = ""
-            extraction_quality = "low"
+                extracted_text = ""
         except Exception as e:
-            logger.warning(f"[EXTRACT] PDF extraction error: {e}, trying fallback")
-            extraction_error = str(e)
+            logger.warning(f"[EXTRACT] PyMuPDF failed: {e}")
             extracted_text = ""
 
-        # FALLBACK 1: PyPDF2 for readable PDFs
-        if not extracted_text and filepath.lower().endswith('.pdf'):
+        # FALLBACK 1: PyPDF2 (FAST)
+        if not extracted_text:
             try:
                 import PyPDF2
                 with open(filepath, 'rb') as f:
                     reader = PyPDF2.PdfReader(f)
-
-                    # CHECK: Valid PDF structure
-                    if len(reader.pages) == 0:
-                        extraction_error = "PDF has no readable pages"
-                    else:
+                    if len(reader.pages) > 0:
                         for page in reader.pages:
                             extracted_text += page.extract_text() or ""
 
-                        # VALIDATE: Ensure we got real text, not junk
                         if extracted_text and len(extracted_text.strip()) >= 100:
                             extraction_quality = "medium"
-                            logger.info(f"[FALLBACK1] PyPDF2 extracted {len(extracted_text)} chars")
+                            logger.info(f"[EXTRACT] PyPDF2 extracted {len(extracted_text)} chars")
                         else:
                             extracted_text = ""
-                            extraction_error = "PyPDF2 extraction insufficient"
             except Exception as e:
-                logger.warning(f"[FALLBACK1] PyPDF2 failed: {e}")
+                logger.warning(f"[EXTRACT] PyPDF2 failed: {e}")
 
-        # FALLBACK 2: Plain text fallback (for corrupted PDFs or text files)
+        # FALLBACK 2: Plain text (FASTEST)
         if not extracted_text:
             try:
                 with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
@@ -987,11 +970,9 @@ def extract_form44_data(submission_id):
                     if content and len(content.strip()) >= 100:
                         extracted_text = content
                         extraction_quality = "high"
-                        logger.info(f"[FALLBACK2] Plain text extracted {len(extracted_text)} chars")
-                    else:
-                        extraction_error = "Plain text fallback: insufficient content"
+                        logger.info(f"[EXTRACT] Plain text extracted {len(extracted_text)} chars")
             except Exception as e:
-                logger.warning(f"[FALLBACK2] Plain text fallback failed: {e}")
+                logger.warning(f"[EXTRACT] Plain text failed: {e}")
 
         # FINAL CHECK: Do we have valid extracted text?
         if not extracted_text or len(extracted_text.strip()) < 100:
