@@ -7,13 +7,10 @@ import {
   FileText,
   BarChart3,
   Shield,
-  Eye,
-  EyeOff,
   CheckCircle,
   AlertCircle,
   ArrowLeft,
   Loader,
-  Lock,
   TrendingUp,
 } from 'lucide-react';
 
@@ -28,23 +25,18 @@ export default function ResultsPage() {
   const [results, setResults] = useState(null);
   const [status, setStatus] = useState(null);
   const [loading, setLoading] = useState(true);
-  const [showFullText, setShowFullText] = useState(false);
   const [activeTab, setActiveTab] = useState('summary');
   const [polling, setPolling] = useState(false);
 
   useEffect(() => {
     fetchStatus();
-    
-    // Setup polling for async tasks
     const pollInterval = setInterval(() => {
       fetchStatus();
     }, 2000);
-    
     return () => clearInterval(pollInterval);
   }, [id]);
 
   useEffect(() => {
-    // Auto-fetch full results when status completes
     if (status?.status === 'completed' && !results) {
       fetchResults();
     }
@@ -55,7 +47,7 @@ export default function ResultsPage() {
       const res = await submissionAPI.getStatus(id);
       setStatus(res.data);
       setLoading(false);
-      
+
       if (res.data.status === 'completed' && !results) {
         fetchResults();
       }
@@ -82,11 +74,10 @@ export default function ResultsPage() {
   const downloadResults = async () => {
     try {
       const content = generateResultsDocument();
-      
       const element = document.createElement('a');
       const file = new Blob([content], { type: 'text/plain' });
       element.href = URL.createObjectURL(file);
-      element.download = `results-${id}-${Date.now()}.txt`;
+      element.download = `validation-report-${id}-${Date.now()}.txt`;
       document.body.appendChild(element);
       element.click();
       document.body.removeChild(element);
@@ -98,52 +89,45 @@ export default function ResultsPage() {
 
   const generateResultsDocument = () => {
     return `
-SWASTHYAAI REGULATOR - PROCESSING RESULTS
-==========================================
+SWASTHAAI REGULATOR - VALIDATION REPORT
+========================================
 
-SUBMISSION DETAILS
+SUBMISSION INFORMATION
+---------------------
+ID: ${results?.submission_id}
+Filename: ${results?.filename}
+Status: ${results?.status}
+Overall: ${results?.overall_status}
+
+VALIDATION RESULTS
 ------------------
-Submission ID: ${id}
-Filename: ${status?.filename || 'N/A'}
-Status: ${status?.status || 'N/A'}
-Created: ${status?.created_at || 'N/A'}
+Total Checks: ${results?.total_checks}
+Passed: ${results?.checks_passed}
+Failed: ${results?.checks_failed}
+Skipped: ${results?.checks_skipped}
 
-EXTRACTION RESULTS
-------------------
-Quality: ${results?.extraction?.quality || 'N/A'}
-Confidence: ${results?.extraction?.confidence || 'N/A'}
-Method: ${results?.extraction?.method || 'N/A'}
-Pages: ${results?.extraction?.pages || 'N/A'}
-
-ANONYMIZATION
---------------
-PII Detected: ${Object.keys(results?.pii_stats || {}).length > 0 ? 'Yes' : 'No'}
-${Object.entries(results?.pii_stats || {})
-  .map(([type, count]) => `${type}: ${count} occurrences`)
-  .join('\n')}
-
-K-Anonymity: ${results?.anonymization?.k_anonymity || 'N/A'}
-L-Diversity: ${results?.anonymization?.l_diversity || 'N/A'}
-T-Closeness: ${results?.anonymization?.t_closeness || 'N/A'}
-
-SUMMARIZATION
---------------
-${results?.summary || 'No summary available'}
+FORM COMPLETENESS
+-----------------
+Score: ${Math.round(results?.form_completeness || 0)}%
 
 KEY FINDINGS
-------------
-${(results?.key_findings || []).length > 0
-  ? results.key_findings.map((f, i) => `${i + 1}. ${f}`).join('\n')
-  : 'No specific findings'}
+-----------
+${(results?.key_findings || []).map((f, i) => `${i + 1}. ${f}`).join('\n')}
 
-COMPLIANCE STATUS
+DETAILED FINDINGS
 -----------------
-Overall Score: ${results?.compliance?.overall_score || 0}%
-Compliant: ${results?.compliance?.is_compliant ? 'Yes' : 'No'}
-Status: ${results?.compliance?.status || 'N/A'}
+${(results?.findings || []).join('\n')}
+
+RECOMMENDATIONS
+----------------
+${(results?.recommendations || []).join('\n')}
+
+COMPREHENSIVE SUMMARY
+---------------------
+${results?.summary || 'No summary available'}
 
 Generated: ${new Date().toLocaleString()}
-    `;
+`;
   };
 
   if (loading && !status) {
@@ -168,7 +152,6 @@ Generated: ${new Date().toLocaleString()}
     );
   }
 
-  // Processing status overlay for async tasks
   if (status?.status !== 'completed' && status?.status !== 'failed') {
     return (
       <>
@@ -185,20 +168,8 @@ Generated: ${new Date().toLocaleString()}
                   <Loader className="animate-spin text-6xl mx-auto mb-6 text-primary-500" style={{fontSize: '60px'}} />
                   <h2 className="text-2xl font-bold mb-4">Processing Document</h2>
                   <p className="text-gray-600 mb-4">
-                    Status: <span className="font-semibold capitalize">{status?.current_stage}</span>
+                    Status: <span className="font-semibold capitalize">{status?.status}</span>
                   </p>
-                  
-                  {/* Progress indicator */}
-                  <div className="mb-6">
-                    <ProcessingProgressBar stage={status?.current_stage} />
-                  </div>
-                  
-                  {status?.async_mode && (
-                    <p className="text-sm text-gray-500">
-                      Task ID: {status?.task_id}
-                    </p>
-                  )}
-                  
                   <button
                     onClick={() => navigate('/dashboard')}
                     className="mt-6 btn btn-secondary w-full"
@@ -236,7 +207,7 @@ Generated: ${new Date().toLocaleString()}
                     <ArrowLeft className="w-6 h-6" />
                   </button>
                   <div>
-                    <h1 className="text-3xl font-bold text-gray-900">{status?.filename}</h1>
+                    <h1 className="text-3xl font-bold text-gray-900">{results?.filename}</h1>
                     <p className="text-sm text-gray-500 mt-1">ID: {id}</p>
                   </div>
                 </div>
@@ -245,35 +216,35 @@ Generated: ${new Date().toLocaleString()}
                   className="btn btn-primary"
                 >
                   <Download className="w-4 h-4 mr-2" />
-                  Download Results
+                  Download Report
                 </button>
               </div>
 
               {/* Status Cards */}
               <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
                 <StatusCard
-                  label="Status"
-                  value={status?.status}
-                  icon={status?.status === 'completed' ? CheckCircle : AlertCircle}
-                  color={status?.status === 'completed' ? 'green' : 'red'}
+                  label="Overall Status"
+                  value={results?.overall_status === 'PASS' ? 'APPROVED' : 'FAILED'}
+                  icon={results?.overall_status === 'PASS' ? CheckCircle : AlertCircle}
+                  color={results?.overall_status === 'PASS' ? 'green' : 'red'}
                 />
                 <StatusCard
-                  label="Extraction"
-                  value={results?.extraction?.quality || 'N/A'}
-                  icon={FileText}
+                  label="Checks Passed"
+                  value={results?.checks_passed || 0}
+                  icon={CheckCircle}
+                  color="green"
+                />
+                <StatusCard
+                  label="Form Completeness"
+                  value={`${Math.round(results?.form_completeness || 0)}%`}
+                  icon={TrendingUp}
+                  color={results?.form_completeness >= 70 ? 'green' : 'orange'}
+                />
+                <StatusCard
+                  label="Total Checks"
+                  value={results?.total_checks || 0}
+                  icon={BarChart3}
                   color="blue"
-                />
-                <StatusCard
-                  label="PII Found"
-                  value={Object.keys(results?.pii_stats || {}).length}
-                  icon={Lock}
-                  color="orange"
-                />
-                <StatusCard
-                  label="Compliance"
-                  value={`${Math.round(results?.compliance?.overall_score || 0)}%`}
-                  icon={Shield}
-                  color={results?.compliance?.is_compliant ? 'green' : 'red'}
                 />
               </div>
 
@@ -282,9 +253,9 @@ Generated: ${new Date().toLocaleString()}
                 <div className="flex border-b border-gray-200">
                   {[
                     { id: 'summary', label: 'Summary' },
-                    { id: 'extraction', label: 'Extraction' },
-                    { id: 'anonymization', label: 'Anonymization' },
-                    { id: 'compliance', label: 'Compliance' },
+                    { id: 'validation', label: 'Validation Results' },
+                    { id: 'findings', label: 'Findings & Recommendations' },
+                    { id: 'details', label: 'Details' },
                   ].map((tab) => (
                     <button
                       key={tab.id}
@@ -303,11 +274,9 @@ Generated: ${new Date().toLocaleString()}
                 {/* Tab Content */}
                 <div className="p-6">
                   {activeTab === 'summary' && <SummaryTab results={results} />}
-                  {activeTab === 'extraction' && <ExtractionTab results={results} />}
-                  {activeTab === 'anonymization' && (
-                    <AnonymizationTab results={results} showFullText={showFullText} setShowFullText={setShowFullText} />
-                  )}
-                  {activeTab === 'compliance' && <ComplianceTab results={results} />}
+                  {activeTab === 'validation' && <ValidationTab results={results} />}
+                  {activeTab === 'findings' && <FindingsTab results={results} />}
+                  {activeTab === 'details' && <DetailsTab results={results} />}
                 </div>
               </div>
             </div>
@@ -315,6 +284,255 @@ Generated: ${new Date().toLocaleString()}
         </div>
       </div>
     </>
+  );
+}
+
+// Summary Tab - Shows comprehensive summary
+function SummaryTab({ results }) {
+  return (
+    <div className="space-y-6">
+      <div>
+        <h3 className="text-lg font-semibold text-gray-900 mb-4">Overall Assessment</h3>
+        <div className={`rounded-lg p-6 border-2 ${
+          results?.overall_status === 'PASS'
+            ? 'bg-green-50 border-green-200'
+            : 'bg-red-50 border-red-200'
+        }`}>
+          <div className="flex items-center space-x-4">
+            {results?.overall_status === 'PASS' ? (
+              <CheckCircle className="w-12 h-12 text-green-600" />
+            ) : (
+              <AlertCircle className="w-12 h-12 text-red-600" />
+            )}
+            <div>
+              <p className={`text-xl font-bold ${
+                results?.overall_status === 'PASS' ? 'text-green-900' : 'text-red-900'
+              }`}>
+                {results?.overall_status === 'PASS'
+                  ? 'APPROVED FOR REGULATORY REVIEW'
+                  : 'REQUIRES ATTENTION'}
+              </p>
+              {results?.form_completeness && (
+                <p className="text-sm text-gray-600 mt-1">
+                  Form Completeness: {Math.round(results.form_completeness)}%
+                </p>
+              )}
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div>
+        <h3 className="text-lg font-semibold text-gray-900 mb-4">Validation Pipeline Summary</h3>
+        <div className="grid grid-cols-4 gap-4 mb-6">
+          <div className="bg-green-50 rounded-lg p-4 border border-green-200">
+            <p className="text-sm text-green-600 font-semibold">Passed</p>
+            <p className="text-2xl font-bold text-green-900">{results?.checks_passed || 0}</p>
+          </div>
+          <div className="bg-red-50 rounded-lg p-4 border border-red-200">
+            <p className="text-sm text-red-600 font-semibold">Failed</p>
+            <p className="text-2xl font-bold text-red-900">{results?.checks_failed || 0}</p>
+          </div>
+          <div className="bg-yellow-50 rounded-lg p-4 border border-yellow-200">
+            <p className="text-sm text-yellow-600 font-semibold">Skipped</p>
+            <p className="text-2xl font-bold text-yellow-900">{results?.checks_skipped || 0}</p>
+          </div>
+          <div className="bg-blue-50 rounded-lg p-4 border border-blue-200">
+            <p className="text-sm text-blue-600 font-semibold">Total Checks</p>
+            <p className="text-2xl font-bold text-blue-900">{results?.total_checks || 0}</p>
+          </div>
+        </div>
+      </div>
+
+      <div>
+        <h3 className="text-lg font-semibold text-gray-900 mb-4">Comprehensive Summary</h3>
+        <div className="bg-gray-50 rounded-lg p-6 border border-gray-200">
+          <p className="text-gray-800 whitespace-pre-wrap font-mono text-sm leading-relaxed">
+            {results?.summary || 'No summary available'}
+          </p>
+        </div>
+      </div>
+
+      {results?.key_findings && results.key_findings.length > 0 && (
+        <div>
+          <h3 className="text-lg font-semibold text-gray-900 mb-4">Key Findings</h3>
+          <ul className="space-y-3">
+            {results.key_findings.map((finding, idx) => (
+              <li key={idx} className="flex items-start">
+                <CheckCircle className="w-5 h-5 text-green-600 mr-3 mt-0.5 flex-shrink-0" />
+                <span className="text-gray-700">{finding}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Validation Results Tab
+function ValidationTab({ results }) {
+  return (
+    <div className="space-y-4">
+      <h3 className="text-lg font-semibold text-gray-900 mb-4">Validation Checks</h3>
+      {results?.validation_results && results.validation_results.length > 0 ? (
+        results.validation_results.map((check, idx) => (
+          <div
+            key={idx}
+            className={`rounded-lg p-4 border-2 ${
+              check.status === 'PASS'
+                ? 'bg-green-50 border-green-200'
+                : check.status === 'FAIL'
+                ? 'bg-red-50 border-red-200'
+                : check.status === 'SKIPPED'
+                ? 'bg-yellow-50 border-yellow-200'
+                : 'bg-gray-50 border-gray-200'
+            }`}
+          >
+            <div className="flex items-start justify-between">
+              <div className="flex-1">
+                <div className="flex items-center space-x-3">
+                  {check.status === 'PASS' && (
+                    <CheckCircle className="w-5 h-5 text-green-600" />
+                  )}
+                  {check.status === 'FAIL' && (
+                    <AlertCircle className="w-5 h-5 text-red-600" />
+                  )}
+                  {check.status === 'SKIPPED' && (
+                    <span className="text-xl">⊘</span>
+                  )}
+                  <h4 className="font-semibold text-gray-900">{check.check_type}</h4>
+                </div>
+                <p className={`text-sm mt-2 ${
+                  check.status === 'PASS'
+                    ? 'text-green-700'
+                    : check.status === 'FAIL'
+                    ? 'text-red-700'
+                    : 'text-gray-700'
+                }`}>
+                  {check.details?.reason || `Status: ${check.status}`}
+                </p>
+              </div>
+              <span className={`px-3 py-1 rounded-full text-xs font-semibold ${
+                check.status === 'PASS'
+                  ? 'bg-green-200 text-green-800'
+                  : check.status === 'FAIL'
+                  ? 'bg-red-200 text-red-800'
+                  : 'bg-yellow-200 text-yellow-800'
+              }`}>
+                {check.status}
+              </span>
+            </div>
+            {check.details?.completeness && (
+              <div className="mt-3 pt-3 border-t border-gray-300">
+                <p className="text-sm text-gray-600">
+                  Completeness: <span className="font-semibold">{Math.round(check.details.completeness)}%</span>
+                </p>
+              </div>
+            )}
+          </div>
+        ))
+      ) : (
+        <p className="text-gray-500 italic">No validation results available</p>
+      )}
+    </div>
+  );
+}
+
+// Findings & Recommendations Tab
+function FindingsTab({ results }) {
+  return (
+    <div className="space-y-6">
+      <div>
+        <h3 className="text-lg font-semibold text-gray-900 mb-4">Detailed Findings</h3>
+        <div className="space-y-3">
+          {results?.findings && results.findings.length > 0 ? (
+            results.findings.map((finding, idx) => (
+              <div key={idx} className="bg-gray-50 rounded-lg p-4 border border-gray-200">
+                <p className="text-gray-800 text-sm">{finding}</p>
+              </div>
+            ))
+          ) : (
+            <p className="text-gray-500 italic">No findings available</p>
+          )}
+        </div>
+      </div>
+
+      <div>
+        <h3 className="text-lg font-semibold text-gray-900 mb-4">Recommendations</h3>
+        <div className="space-y-3">
+          {results?.recommendations && results.recommendations.length > 0 ? (
+            results.recommendations.map((rec, idx) => (
+              <div
+                key={idx}
+                className={`rounded-lg p-4 border-l-4 ${
+                  rec.includes('✓')
+                    ? 'bg-green-50 border-l-green-500'
+                    : rec.includes('✗')
+                    ? 'bg-red-50 border-l-red-500'
+                    : rec.includes('⚠')
+                    ? 'bg-yellow-50 border-l-yellow-500'
+                    : 'bg-blue-50 border-l-blue-500'
+                }`}
+              >
+                <p className="text-gray-800 text-sm">{rec}</p>
+              </div>
+            ))
+          ) : (
+            <p className="text-gray-500 italic">No recommendations</p>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// Details Tab
+function DetailsTab({ results }) {
+  return (
+    <div className="space-y-6">
+      <div>
+        <h3 className="text-lg font-semibold text-gray-900 mb-4">Submission Details</h3>
+        <div className="grid grid-cols-2 gap-4">
+          <div className="bg-gray-50 p-4 rounded-lg border border-gray-200">
+            <p className="text-xs text-gray-600 uppercase font-semibold">Submission ID</p>
+            <p className="font-mono text-sm text-gray-900 mt-1 break-all">{results?.submission_id}</p>
+          </div>
+          <div className="bg-gray-50 p-4 rounded-lg border border-gray-200">
+            <p className="text-xs text-gray-600 uppercase font-semibold">Filename</p>
+            <p className="font-medium text-gray-900 mt-1">{results?.filename}</p>
+          </div>
+          <div className="bg-gray-50 p-4 rounded-lg border border-gray-200">
+            <p className="text-xs text-gray-600 uppercase font-semibold">Status</p>
+            <p className="font-medium text-gray-900 mt-1 capitalize">{results?.status}</p>
+          </div>
+          <div className="bg-gray-50 p-4 rounded-lg border border-gray-200">
+            <p className="text-xs text-gray-600 uppercase font-semibold">Form Completeness</p>
+            <p className="font-medium text-gray-900 mt-1">{Math.round(results?.form_completeness || 0)}%</p>
+          </div>
+        </div>
+      </div>
+
+      {results?.critical_issues && results.critical_issues.length > 0 && (
+        <div>
+          <h3 className="text-lg font-semibold text-gray-900 mb-4">Critical Issues</h3>
+          <div className="space-y-2">
+            {results.critical_issues.map((issue, idx) => (
+              <div key={idx} className="bg-red-50 border-l-4 border-l-red-500 p-4 rounded">
+                <p className="text-red-800 text-sm">{issue}</p>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      <div>
+        <h3 className="text-lg font-semibold text-gray-900 mb-4">Timestamp</h3>
+        <p className="text-gray-600 text-sm">
+          {results?.timestamp ? new Date(results.timestamp).toLocaleString() : 'N/A'}
+        </p>
+      </div>
+    </div>
   );
 }
 
@@ -335,251 +553,6 @@ function StatusCard({ label, value, icon: Icon, color }) {
           <p className="text-2xl font-bold mt-1">{value}</p>
         </div>
         <Icon className="w-8 h-8 opacity-50" />
-      </div>
-    </div>
-  );
-}
-
-// Summary Tab
-function SummaryTab({ results }) {
-  return (
-    <div className="space-y-4">
-      <h3 className="text-lg font-semibold text-gray-900">Document Summary</h3>
-      <div className="bg-gray-50 rounded-lg p-4 border border-gray-200">
-        <p className="text-gray-800 whitespace-pre-wrap leading-relaxed">
-          {results?.summary || 'No summary available'}
-        </p>
-      </div>
-
-      {results?.key_findings && results.key_findings.length > 0 && (
-        <>
-          <h3 className="text-lg font-semibold text-gray-900 mt-6">Key Findings</h3>
-          <ul className="space-y-3">
-            {results.key_findings.map((finding, idx) => (
-              <li key={idx} className="flex items-start">
-                <CheckCircle className="w-5 h-5 text-green-600 mr-3 mt-0.5 flex-shrink-0" />
-                <span className="text-gray-700">{finding}</span>
-              </li>
-            ))}
-          </ul>
-        </>
-      )}
-    </div>
-  );
-}
-
-// Extraction Tab
-function ExtractionTab({ results }) {
-  const ext = results?.extraction || {};
-  
-  return (
-    <div className="space-y-4">
-      <div className="grid grid-cols-2 gap-4">
-        <div className="bg-gray-50 p-4 rounded-lg border border-gray-200">
-          <p className="text-sm text-gray-600">Quality</p>
-          <p className="text-xl font-semibold text-gray-900 mt-1">{ext.quality || 'N/A'}</p>
-        </div>
-        <div className="bg-gray-50 p-4 rounded-lg border border-gray-200">
-          <p className="text-sm text-gray-600">Confidence</p>
-          <p className="text-xl font-semibold text-gray-900 mt-1">{ext.confidence || 'N/A'}</p>
-        </div>
-        <div className="bg-gray-50 p-4 rounded-lg border border-gray-200">
-          <p className="text-sm text-gray-600">Method</p>
-          <p className="text-xl font-semibold text-gray-900 mt-1">{ext.method || 'N/A'}</p>
-        </div>
-        <div className="bg-gray-50 p-4 rounded-lg border border-gray-200">
-          <p className="text-sm text-gray-600">Pages</p>
-          <p className="text-xl font-semibold text-gray-900 mt-1">{ext.pages || 'N/A'}</p>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// Anonymization Tab
-function AnonymizationTab({ results, showFullText, setShowFullText }) {
-  const anon = results?.anonymization || {};
-  const piiStats = results?.pii_stats || {};
-  
-  return (
-    <div className="space-y-6">
-      <div>
-        <h3 className="text-lg font-semibold text-gray-900 mb-4">Anonymity Metrics</h3>
-        <div className="grid grid-cols-3 gap-4">
-          <MetricCard
-            label="K-Anonymity"
-            value={anon.k_anonymity || 0}
-            description="Indistinguishability level"
-          />
-          <MetricCard
-            label="L-Diversity"
-            value={anon.l_diversity || 0}
-            description="Diversity of sensitive values"
-          />
-          <MetricCard
-            label="T-Closeness"
-            value={anon.t_closeness || 0}
-            description="Closeness to distribution"
-          />
-        </div>
-      </div>
-
-      <div>
-        <h3 className="text-lg font-semibold text-gray-900 mb-4">PII Detected</h3>
-        {Object.keys(piiStats).length > 0 ? (
-          <div className="space-y-2">
-            {Object.entries(piiStats).map(([type, count]) => (
-              <div key={type} className="flex items-center justify-between bg-orange-50 p-3 rounded-lg border border-orange-200">
-                <span className="font-medium text-gray-900">{type}</span>
-                <span className="bg-orange-200 text-orange-900 px-3 py-1 rounded-full text-sm font-semibold">
-                  {count}
-                </span>
-              </div>
-            ))}
-          </div>
-        ) : (
-          <p className="text-gray-500 italic">No PII detected</p>
-        )}
-      </div>
-
-      <div>
-        <div className="flex items-center justify-between mb-4">
-          <h3 className="text-lg font-semibold text-gray-900">Anonymized Text Preview</h3>
-          <button
-            onClick={() => setShowFullText(!showFullText)}
-            className="flex items-center text-primary-600 hover:text-primary-700"
-          >
-            {showFullText ? (
-              <>
-                <EyeOff className="w-4 h-4 mr-2" />
-                Hide
-              </>
-            ) : (
-              <>
-                <Eye className="w-4 h-4 mr-2" />
-                Show Full
-              </>
-            )}
-          </button>
-        </div>
-        <div className="bg-gray-50 rounded-lg p-4 border border-gray-200 max-h-96 overflow-y-auto">
-          <p className="text-gray-800 whitespace-pre-wrap text-sm">
-            {showFullText
-              ? anon.anonymized_text || 'N/A'
-              : ((anon.anonymized_text || 'N/A').substring(0, 500) + '...')}
-          </p>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// Compliance Tab
-function ComplianceTab({ results }) {
-  const comp = results?.compliance || {};
-  const overallScore = Math.round(comp.overall_score || 0);
-  
-  return (
-    <div className="space-y-6">
-      <div>
-        <h3 className="text-lg font-semibold text-gray-900 mb-4">Overall Compliance</h3>
-        <div className="flex items-center space-x-6">
-          <div className={`rounded-full w-32 h-32 flex items-center justify-center ${
-            comp.is_compliant ? 'bg-green-100' : 'bg-red-100'
-          }`}>
-            <div className="text-center">
-              <p className="text-4xl font-bold text-gray-900">{overallScore}%</p>
-              <p className="text-sm text-gray-600 mt-1">Score</p>
-            </div>
-          </div>
-          <div className="flex-1">
-            <p className="text-lg font-semibold">
-              Status: <span className={comp.is_compliant ? 'text-green-600' : 'text-red-600'}>
-                {comp.is_compliant ? '✓ Compliant' : '✗ Non-Compliant'}
-              </span>
-            </p>
-            <p className="text-gray-600 mt-2">{comp.status || 'N/A'}</p>
-          </div>
-        </div>
-      </div>
-
-      {comp.framework_compliance && (
-        <div>
-          <h3 className="text-lg font-semibold text-gray-900 mb-4">Framework Details</h3>
-          <div className="space-y-3">
-            {Object.entries(comp.framework_compliance || {}).map(([framework, score]) => (
-              <FrameworkScore
-                key={framework}
-                framework={framework}
-                score={score}
-              />
-            ))}
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
-
-// Metric Card
-function MetricCard({ label, value, description }) {
-  return (
-    <div className="bg-blue-50 rounded-lg p-4 border border-blue-200">
-      <p className="text-sm text-blue-600 font-medium">{label}</p>
-      <p className="text-3xl font-bold text-blue-900 mt-2">{value}</p>
-      <p className="text-xs text-blue-600 mt-2 opacity-75">{description}</p>
-    </div>
-  );
-}
-
-// Framework Score
-function FrameworkScore({ framework, score }) {
-  const scoreNum = Math.round(score * 100) || 0;
-  
-  return (
-    <div className="flex items-center justify-between bg-gray-50 p-4 rounded-lg border border-gray-200">
-      <span className="font-medium text-gray-900 capitalize">{framework}</span>
-      <div className="flex items-center space-x-3">
-        <div className="w-40 bg-gray-200 rounded-full h-2">
-          <div
-            className={`h-2 rounded-full transition-all ${
-              scoreNum >= 70 ? 'bg-green-600' : scoreNum >= 40 ? 'bg-yellow-600' : 'bg-red-600'
-            }`}
-            style={{ width: `${scoreNum}%` }}
-          />
-        </div>
-        <span className="text-sm font-semibold text-gray-900 w-12 text-right">{scoreNum}%</span>
-      </div>
-    </div>
-  );
-}
-
-// Processing Progress Bar
-function ProcessingProgressBar({ stage }) {
-  const stages = [
-    { id: 'queued', label: 'Queued' },
-    { id: 'extracting', label: 'Extracting' },
-    { id: 'anonymizing', label: 'Anonymizing' },
-    { id: 'summarizing', label: 'Summarizing' },
-    { id: 'validating', label: 'Validating' },
-    { id: 'completed', label: 'Completed' },
-  ];
-  
-  const currentIndex = stages.findIndex(s => s.id === stage);
-  
-  return (
-    <div>
-      <div className="flex justify-between items-center">
-        {stages.map((s, idx) => (
-          <div key={s.id} className="flex flex-col items-center flex-1">
-            <div className={`w-8 h-8 rounded-full flex items-center justify-center text-sm font-bold ${
-              idx <= currentIndex ? 'bg-primary-500 text-white' : 'bg-gray-300 text-gray-600'
-            }`}>
-              {idx < currentIndex ? '✓' : idx}
-            </div>
-            <p className="text-xs text-gray-600 mt-2 text-center">{s.label}</p>
-          </div>
-        ))}
       </div>
     </div>
   );
