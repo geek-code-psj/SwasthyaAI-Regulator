@@ -1522,33 +1522,33 @@ def generate_findings_summary(results_data):
 def generate_recommendations(results_data, final_status):
     """Generate actionable recommendations based on validation results"""
     recommendations = []
-    
+
     if final_status == 'failed':
-        recommendations.append('⚠ REVIEW REQUIRED: Address flagged issues before resubmission')
+        recommendations.append('[ALERT] REVIEW REQUIRED: Address flagged issues before resubmission')
         recommendations.append('Contact regulatory team for clarification on failed checks')
-    
+
     for result in results_data:
         if result['status'] == 'FAIL':
             check_type = result['check_type']
             details = result['details']
             if check_type == 'Duplicate Detection':
-                recommendations.append('ACTION: Check system for existing similar submissions and resolve conflicts')
+                recommendations.append('[ACTION] Check system for existing similar submissions and resolve conflicts')
             elif check_type == 'Form 44 Validation':
                 missing = details.get('missing_fields', [])
                 if missing:
-                    recommendations.append(f"ACTION: Complete mandatory Form 44 fields: {', '.join(missing[:2])}")
+                    recommendations.append(f"[ACTION] Complete mandatory Form 44 fields: {', '.join(missing[:2])}")
                 else:
-                    recommendations.append('ACTION: Review Form 44 data validity and format')
+                    recommendations.append('[ACTION] Review Form 44 data validity and format')
             elif check_type == 'Consistency Check':
                 issues = details.get('critical_issues', [])
                 if issues:
-                    recommendations.append(f"ACTION: Resolve data inconsistency: {issues[0]}")
-    
+                    recommendations.append(f"[ACTION] Resolve data inconsistency: {issues[0]}")
+
     if final_status == 'completed':
-        recommendations.append('✓ Submission ready for regulatory review')
-        recommendations.append('✓ All validation criteria successfully met')
+        recommendations.append('[OK] Submission ready for regulatory review')
+        recommendations.append('[OK] All validation criteria successfully met')
         recommendations.append('Next: Submit to compliance officer for approval')
-    
+
     return recommendations if recommendations else []
 
 @app.route('/api/health', methods=['GET'])
