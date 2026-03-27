@@ -1272,15 +1272,15 @@ def process_submission(submission_id):
         # FINAL STAGE: Update to completed or failed
         # Check if any check failed to determine final status
         failed_checks = [check.get('status') for check in review_report['checks_performed'] if check.get('status') == 'FAIL']
-        
+
         if failed_checks or review_report['overall_status'] == 'FAIL':
             submission.status = 'failed'
         else:
             submission.status = 'completed'
-        
+
         review_report['stage_progression'].append(submission.status)
         review_report['processing_status'] = submission.status
-        
+
         # Save each validation result to database for persistence
         for check in review_report['checks_performed']:
             result = ValidationResult(
@@ -1290,20 +1290,98 @@ def process_submission(submission_id):
                 result=json.dumps(check, default=str)
             )
             db.session.add(result)
-        
+
         db.session.commit()
-        
+
         log_audit('PROCESS_SUBMISSION', user or 'anonymous', submission_id, {
             'status': submission.status,
             'checks': len(review_report['checks_performed']),
             'stages_completed': review_report['stage_progression']
         })
-        
+
         return jsonify(review_report), 200
-        
+
     except Exception as e:
         logger.error(f"Process submission error: {e}")
         return jsonify({'error': str(e), 'type': type(e).__name__}), 500
+
+# ============================================================================
+# HELPER FUNCTIONS FOR RESULTS GENERATION
+# ============================================================================
+
+def generate_comprehensive_summary(submission, results_data, completeness):
+    """Generate comprehensive human-readable summary from all validation results"""
+    summary_parts = []
+
+    # Overall status
+    status_text = "APPROVED FOR REGULATORY REVIEW" if submission.status == 'completed' else "REQUIRES ATTENTION"
+    summary_parts.append(f"=== SUBMISSION VALIDATION SUMMARY ===")
+    summary_parts.append(f"Status: {status_text}")
+    summary_parts.append(f"Submission ID: {submission.id}")
+    summary_parts.append(f"Filename: {submission.filename}")
+    summary_parts.append("")
+
+    # Form validation result
+    form_result = next((r for r in results_data if 'ADR Validation' in r['check_type'] or 'Form 44' in r['check_type']), None)
+    if form_result:
+        completeness_pct = form_result['details'].get('completeness', 0)
+        summary_parts.append(f"Form Completeness: {completeness_pct}%")
+        if form_result['status'] == 'PASS':
+            summary_parts.append(f"Form validation PASSED - All mandatory fields present")
+        else:
+            summary_parts.append(f"Form validation FAILED - Missing required fields")
+            if form_result['details'].get('critical_issues'):
+                summary_parts.append("Missing fields: " + ", ".join(form_result['details']['critical_issues'][:3]))
+        summary_parts.append("")
+
+    # Validation pipeline results
+    summary_parts.append("VALIDATION PIPELINE RESULTS:")
+    passed_checks = [r for r in results_data if r['status'] == 'PASS']
+    failed_checks = [r for r in results_data if r['status'] == 'FAIL']
+    skipped_checks = [r for r in results_data if r['status'] == 'SKIPPED']
+
+    if passed_checks:
+        summary_parts.append(f"Passed ({len(passed_checks)} checks):")
+        for check in passed_checks:
+            summary_parts.append(f"  - {check['check_type']}")
+
+    if failed_checks:
+        summary_parts.append(f"Failed ({len(failed_checks)} checks):")
+        for check in failed_checks:
+            summary_parts.append(f"  - {check['check_type']}")
+
+    if skipped_checks:
+        summary_parts.append(f"Skipped ({len(skipped_checks)} checks):")
+        for check in skipped_checks:
+            summary_parts.append(f"  - {check['check_type']}")
+
+    summary_parts.append("")
+
+    # Recommendations
+    if submission.status == 'completed':
+        summary_parts.append("NEXT STEPS:")
+        summary_parts.append("- Document passed all regulatory validation checks")
+        summary_parts.append("- Ready for submission to regulatory authority")
+        summary_parts.append("- Forward to compliance officer for final approval")
+    else:
+        summary_parts.append("ACTION REQUIRED:")
+        if failed_checks:
+            summary_parts.append("- Address failed validation checks before resubmission")
+            summary_parts.append("- Complete all mandatory form fields")
+            summary_parts.append("- Ensure data consistency across all sections")
+
+    return "\n".join(summary_parts)
+
+def extract_key_findings(findings):
+    """Extract critical findings from findings list"""
+    key = []
+    for finding in findings:
+        if '[OK]' in finding or '[FAIL]' in finding or '[SKIP]' in finding:
+            # Clean up the markers and add
+            clean = finding.replace('[OK]', '').replace('[FAIL]', '').replace('[SKIP]', '').replace('[ERR]', '').strip()
+            if clean and len(clean) > 5:
+                key.append(clean)
+    return key[:5]  # Return top 5 findings
 
 @app.route('/api/submissions/<submission_id>/results', methods=['GET', 'OPTIONS'])
 def get_submission_results(submission_id):
@@ -1388,80 +1466,6 @@ def get_submission_results(submission_id):
     except Exception as e:
         logger.error(f"Get submission results error: {e}")
         return jsonify({'error': str(e), 'type': type(e).__name__}), 500
-
-def generate_comprehensive_summary(submission, results_data, completeness):
-    """Generate comprehensive human-readable summary from all validation results"""
-    summary_parts = []
-
-    # Overall status
-    status_text = "APPROVED FOR REGULATORY REVIEW" if submission.status == 'completed' else "REQUIRES ATTENTION"
-    summary_parts.append(f"=== SUBMISSION VALIDATION SUMMARY ===")
-    summary_parts.append(f"Status: {status_text}")
-    summary_parts.append(f"Submission ID: {submission.id}")
-    summary_parts.append(f"Filename: {submission.filename}")
-    summary_parts.append("")
-
-    # Form validation result
-    form_result = next((r for r in results_data if 'ADR Validation' in r['check_type'] or 'Form 44' in r['check_type']), None)
-    if form_result:
-        completeness_pct = form_result['details'].get('completeness', 0)
-        summary_parts.append(f"Form Completeness: {completeness_pct}%")
-        if form_result['status'] == 'PASS':
-            summary_parts.append(f"✓ Form validation PASSED - All mandatory fields present")
-        else:
-            summary_parts.append(f"✗ Form validation FAILED - Missing required fields")
-            if form_result['details'].get('critical_issues'):
-                summary_parts.append("Missing fields: " + ", ".join(form_result['details']['critical_issues'][:3]))
-        summary_parts.append("")
-
-    # Validation pipeline results
-    summary_parts.append("VALIDATION PIPELINE RESULTS:")
-    passed_checks = [r for r in results_data if r['status'] == 'PASS']
-    failed_checks = [r for r in results_data if r['status'] == 'FAIL']
-    skipped_checks = [r for r in results_data if r['status'] == 'SKIPPED']
-
-    if passed_checks:
-        summary_parts.append(f"✓ Passed ({len(passed_checks)} checks):")
-        for check in passed_checks:
-            summary_parts.append(f"  - {check['check_type']}")
-
-    if failed_checks:
-        summary_parts.append(f"✗ Failed ({len(failed_checks)} checks):")
-        for check in failed_checks:
-            summary_parts.append(f"  - {check['check_type']}")
-
-    if skipped_checks:
-        summary_parts.append(f"⊘ Skipped ({len(skipped_checks)} checks):")
-        for check in skipped_checks:
-            summary_parts.append(f"  - {check['check_type']}")
-
-    summary_parts.append("")
-
-    # Recommendations
-    if submission.status == 'completed':
-        summary_parts.append("NEXT STEPS:")
-        summary_parts.append("✓ Document passed all regulatory validation checks")
-        summary_parts.append("✓ Ready for submission to regulatory authority")
-        summary_parts.append("✓ Forward to compliance officer for final approval")
-    else:
-        summary_parts.append("ACTION REQUIRED:")
-        if failed_checks:
-            summary_parts.append("✗ Address failed validation checks before resubmission")
-            summary_parts.append("✗ Complete all mandatory form fields")
-            summary_parts.append("✗ Ensure data consistency across all sections")
-
-    return "\n".join(summary_parts)
-
-def extract_key_findings(findings):
-    """Extract critical findings from findings list"""
-    key = []
-    for finding in findings:
-        if '[OK]' in finding or '[FAIL]' in finding or '[SKIP]' in finding:
-            # Clean up the markers and add
-            clean = finding.replace('[OK]', '').replace('[FAIL]', '').replace('[SKIP]', '').replace('[ERR]', '').strip()
-            if clean and len(clean) > 5:
-                key.append(clean)
-    return key[:5]  # Return top 5 findings
 
 def generate_findings_summary(results_data):
     """Generate human-readable findings from validation results (with unicode-safe encoding)"""
