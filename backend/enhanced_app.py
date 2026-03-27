@@ -147,6 +147,11 @@ class Submission(db.Model):
     status = db.Column(db.String(50), default='pending')
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     submitted_by = db.Column(db.String(36))
+    # Analytics fields
+    severity = db.Column(db.String(100))  # For adverse events
+    outcome = db.Column(db.String(100))   # Recovery status
+    adverse_event = db.Column(db.Text)    # Adverse event description
+    drug_name = db.Column(db.String(255)) # Primary drug involved
 
 class ValidationResult(db.Model):
     __tablename__ = 'validation_results'
@@ -1848,6 +1853,13 @@ def process_submission(submission_id):
         print(f"  report_date: {form_data.get('report_date', 'MISSING')}")
         sys.stdout.flush()
         
+        # POPULATE ANALYTICS FIELDS IN SUBMISSION
+        submission.severity = form_data.get('event_severity') or form_data.get('severity', 'Unknown')
+        submission.outcome = form_data.get('outcome', 'Unknown')
+        submission.adverse_event = form_data.get('adverse_reaction') or form_data.get('adverse_event', '')
+        submission.drug_name = form_data.get('drug_name', '')
+        db.session.commit()
+        
         # Run comprehensive review with progressive status updates
         review_report = {
             'submission_id': submission_id,
@@ -1926,6 +1938,9 @@ def process_submission(submission_id):
         db.session.commit()
         review_report['stage_progression'].append('validating_form')
 
+        # Initialize detected_form_type
+        detected_form_type = None
+        
         # form_data was already extracted above, use it directly
         if form_data and any(form_data.values()):
             # Detect form type
@@ -2412,33 +2427,29 @@ def get_analytics_summary():
     try:
         # Query all submissions
         submissions = Submission.query.all()
-        results = ValidationResult.query.all()
         
         total_submissions = len(submissions)
         passed_submissions = len([s for s in submissions if s.status in ['completed', 'approved']])
         pass_rate = (passed_submissions / total_submissions * 100) if total_submissions > 0 else 0
         
-        # Calculate severity distribution
-        severity_data = {'Mild': 0, 'Moderate': 0, 'Severe': 0, 'Life-threatening': 0}
+        # Calculate severity distribution from submission records
+        severity_data = {'Mild': 0, 'Moderate': 0, 'Severe': 0, 'Life-threatening': 0, 'Unknown': 0}
         outcome_data = {'Recovered': 0, 'Recovering': 0, 'Not Recovered': 0, 'Unknown': 0, 'Fatal': 0}
         
         for submission in submissions:
-            # Parse validation results for severity/outcome data
-            sub_results = ValidationResult.query.filter_by(submission_id=submission.id).all()
-            for result in sub_results:
-                try:
-                    result_json = json.loads(result.result) if isinstance(result.result, str) else result.result
-                    if isinstance(result_json, dict):
-                        if 'severity_distribution' in result_json:
-                            for severity, count in result_json['severity_distribution'].items():
-                                if severity in severity_data:
-                                    severity_data[severity] += count
-                        if 'outcome_distribution' in result_json:
-                            for outcome, count in result_json['outcome_distribution'].items():
-                                if outcome in outcome_data:
-                                    outcome_data[outcome] += count
-                except:
-                    pass
+            # Get severity and outcome from submission fields
+            severity = submission.severity or 'Unknown'
+            outcome = submission.outcome or 'Unknown'
+            
+            if severity in severity_data:
+                severity_data[severity] += 1
+            else:
+                severity_data['Unknown'] += 1
+            
+            if outcome in outcome_data:
+                outcome_data[outcome] += 1
+            else:
+                outcome_data['Unknown'] += 1
         
         return jsonify({
             'total_submissions': total_submissions,
@@ -2461,18 +2472,13 @@ def get_top_adverse_events():
         adverse_events = {}
         
         for submission in submissions:
-            results = ValidationResult.query.filter_by(submission_id=submission.id).all()
-            for result in results:
-                try:
-                    result_json = json.loads(result.result) if isinstance(result.result, str) else result.result
-                    if isinstance(result_json, dict) and 'adverse_events' in result_json:
-                        for event in result_json['adverse_events']:
-                            adverse_events[event] = adverse_events.get(event, 0) + 1
-                except:
-                    pass
+            if submission.adverse_event:
+                event = submission.adverse_event.strip()
+                if event:
+                    adverse_events[event] = adverse_events.get(event, 0) + 1
         
-        # Get top 5
-        top_events = sorted(adverse_events.items(), key=lambda x: x[1], reverse=True)[:5]
+        # Get top 5, sorted by frequency then alphabetically
+        top_events = sorted(adverse_events.items(), key=lambda x: (-x[1], x[0]))[:5]
         
         return jsonify({
             'top_adverse_events': [{'event': event, 'count': count} for event, count in top_events],
@@ -2491,21 +2497,16 @@ def get_top_drugs():
         drugs = {}
         
         for submission in submissions:
-            results = ValidationResult.query.filter_by(submission_id=submission.id).all()
-            for result in results:
-                try:
-                    result_json = json.loads(result.result) if isinstance(result.result, str) else result.result
-                    if isinstance(result_json, dict) and 'drugs' in result_json:
-                        for drug in result_json['drugs']:
-                            drugs[drug] = drugs.get(drug, 0) + 1
-                except:
-                    pass
+            if submission.drug_name:
+                drug = submission.drug_name.strip()
+                if drug:
+                    drugs[drug] = drugs.get(drug, 0) + 1
         
-        # Get top 5
-        top_drugs = sorted(drugs.items(), key=lambda x: x[1], reverse=True)[:5]
+        # Get top 5, sorted by frequency then alphabetically
+        top_drugs_list = sorted(drugs.items(), key=lambda x: (-x[1], x[0]))[:5]
         
         return jsonify({
-            'top_drugs': [{'drug': drug, 'count': count} for drug, count in top_drugs],
+            'top_drugs': [{'drug': drug, 'count': count} for drug, count in top_drugs_list],
             'timestamp': datetime.utcnow().isoformat()
         }), 200
         
@@ -2809,4 +2810,4 @@ def export_csv_report():
         logger.error(f"CSV export error: {e}")
         return jsonify({'error': str(e)}), 500
     
-    app.run(host='0.0.0.0', port=5000, debug=True)
+if __name__ == '__main__':    app.run(host='0.0.0.0', port=5000, debug=True)
