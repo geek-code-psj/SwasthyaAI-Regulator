@@ -37,7 +37,7 @@ export default function ResultsPage() {
   }, [id]);
 
   useEffect(() => {
-    if (status?.status === 'completed' && !results) {
+    if ((status?.status === 'completed' || status?.status === 'failed') && !results) {
       fetchResults();
     }
   }, [status?.status]);
@@ -48,7 +48,8 @@ export default function ResultsPage() {
       setStatus(res.data);
       setLoading(false);
 
-      if (res.data.status === 'completed' && !results) {
+      // Fetch results immediately if already completed or failed
+      if ((res.data.status === 'completed' || res.data.status === 'failed') && !results) {
         fetchResults();
       }
     } catch (error) {
@@ -130,7 +131,7 @@ Generated: ${new Date().toLocaleString()}
 `;
   };
 
-  if (loading && !status) {
+  if (loading) {
     return (
       <>
         <Helmet>
@@ -152,7 +153,8 @@ Generated: ${new Date().toLocaleString()}
     );
   }
 
-  if (status?.status !== 'completed' && status?.status !== 'failed') {
+  // Wait for both status and results
+  if (!status || !results) {
     return (
       <>
         <Helmet>
@@ -166,17 +168,10 @@ Generated: ${new Date().toLocaleString()}
               <div className="max-w-4xl mx-auto p-6 h-full flex items-center justify-center">
                 <div className="bg-white rounded-lg shadow-lg p-12 text-center max-w-md w-full">
                   <Loader className="animate-spin text-6xl mx-auto mb-6 text-primary-500" style={{fontSize: '60px'}} />
-                  <h2 className="text-2xl font-bold mb-4">Processing Document</h2>
+                  <h2 className="text-2xl font-bold mb-4">Loading Results</h2>
                   <p className="text-gray-600 mb-4">
-                    Status: <span className="font-semibold capitalize">{status?.status}</span>
+                    Status: <span className="font-semibold capitalize">{status?.status || 'processing'}</span>
                   </p>
-                  <button
-                    onClick={() => navigate('/dashboard')}
-                    className="mt-6 btn btn-secondary w-full"
-                  >
-                    <ArrowLeft className="w-4 h-4 mr-2" />
-                    Back to Dashboard
-                  </button>
                 </div>
               </div>
             </main>
