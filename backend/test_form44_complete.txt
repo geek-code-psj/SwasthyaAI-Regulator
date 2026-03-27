@@ -1,0 +1,16 @@
+Drug Name: Paracetamol
+Adverse Reaction: Severe Headache with Dizziness
+Patient Age: 45
+Date of Onset: 15-03-2026
+Reporter Name: Dr. James Wilson
+Report Date: 25-03-2026
+Severity: High
+Outcome: Recovered with treatment
+Duration: 7 days
+Concomitant Medications: Ibuprofen, Aspirin
+Patient Gender: Male
+Patient Weight: 75 kg
+Medical History: Hypertension, Type 2 Diabetes
+Reporter Title: MD - Internal Medicine
+Phone: 9876543210
+Email: dr.wilson@hospital.com

@@ -248,8 +248,8 @@ class Form44Parser:
 
         result = {
             # Drug/Product Information
-            'drug_name': Form44Parser._extract_field(text, ['Drug Name', 'Product Name', 'Brand Name', 'Drug-X']),
-            'batch_number': Form44Parser._extract_field(text, ['Batch Number', 'Batch No', 'Lot Number'], 'batch'),
+            'drug_name': Form44Parser._extract_field(text, ['Drug Name', 'Product Name', 'Brand Name', 'on Drug-']),
+            'batch_number': Form44Parser._extract_field(text, ['Batch Number', 'Batch No', 'Lot Number', 'BATCH'], 'batch'),
             'manufacturing_date': Form44Parser._extract_field(text, ['Manufacturing Date', 'Manufactured', 'Mfg Date'], 'date'),
             'expiration_date': Form44Parser._extract_field(text, ['Expiration Date', 'Exp Date', 'Expiry'], 'date'),
             'strength': Form44Parser._extract_field(text, ['Strength', 'Potency', 'Concentration']),
@@ -262,7 +262,7 @@ class Form44Parser:
 
             # Adverse Reaction - use "Adverse Events" as it appears in PDF
             'adverse_reaction': Form44Parser._extract_field(text, ['Adverse Events', 'Adverse Reaction', 'Adverse Event', 'Reaction']),
-            'onset_date': Form44Parser._extract_field(text, ['Date of Onset', 'Onset Date', 'Study Title'], 'date'),
+            'onset_date': Form44Parser._extract_field(text, ['Date of Onset', 'Onset Date'], 'date'),
             'duration': Form44Parser._extract_field(text, ['Duration']),
             'severity': Form44Parser._extract_field(text, ['Severity']),
             'outcome': Form44Parser._extract_field(text, ['Outcome', 'Result', 'Resolution']),
@@ -271,11 +271,11 @@ class Form44Parser:
             'concomitant_medications': Form44Parser._extract_field(text, ['Concomitant Medications', 'Other Drugs']),
 
             # Reporter Information
-            'reporter_name': Form44Parser._extract_field(text, ['Reporter Name', 'Reported by']),
-            'reporter_title': Form44Parser._extract_field(text, ['Reporter Title', 'Title']),
+            'reporter_name': Form44Parser._extract_field(text, ['Reporter Name', 'Reported by', 'Investigator']),
+            'reporter_title': Form44Parser._extract_field(text, ['Reporter Title', 'Investigator Title']),
             'reporter_phone': Form44Parser._extract_field(text, ['Reporter Phone', 'Phone'], 'phone'),
             'reporter_email': Form44Parser._extract_field(text, ['Reporter Email', 'Email'], 'email'),
-            'report_date': Form44Parser._extract_field(text, ['Report Date', 'Reported on'], 'date'),
+            'report_date': Form44Parser._extract_field(text, ['Report Date', 'Reported on', 'Report On'], 'date'),
         }
 
         # Filter out empty or low-confidence values
@@ -306,11 +306,14 @@ class Form44Parser:
             if match:
                 value = match.group(1).strip()
 
-                # Clean up value - remove trailing field names that snuck in
+                # Clean up value - but only remove obvious field names, not medical terms
+                # Only remove if it looks like a FIELD NAME (single word, all caps or Title Case without comma/digit)
                 words = value.split()
-                # If last word looks like a field name (capitalized, 3+ chars), remove it
-                if words and len(words[-1]) >= 3 and words[-1][0].isupper() and ',' not in words[-1]:
-                    value = ' '.join(words[:-1]).strip()
+                if words and len(words[-1]) >= 2 and words[-1][0].isupper():
+                    # Only remove if it LOOKS like a field label: pure letters, likely standalone
+                    # NOT if it contains: digits, commas, medical-looking terms
+                    if words[-1].isalpha() and words[-1].lower() in ['name', 'title', 'date', 'number', 'code', 'field']:
+                        value = ' '.join(words[:-1]).strip()
 
                 # REJECT: Empty or too short
                 if not value or len(value) < 2:
