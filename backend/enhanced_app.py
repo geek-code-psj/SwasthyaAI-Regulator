@@ -761,20 +761,20 @@ def health_check():
 
 @app.route('/api/submissions', methods=['GET', 'OPTIONS'])
 def get_submissions():
-    """Get list of submissions (paginated)"""
+    """Get list of submissions with validation summary (paginated)"""
     if request.method == 'OPTIONS':
         return '', 200
-    
+
     try:
         # Try to get user from JWT if available, otherwise use 'anonymous'
         try:
             user = get_jwt_identity()
         except:
             user = 'anonymous'
-        
+
         page = request.args.get('page', 1, type=int)
         per_page = request.args.get('per_page', 10, type=int)
-        
+
         # Query submissions
         if user == 'anonymous':
             # Show all submissions if not authenticated
@@ -782,23 +782,52 @@ def get_submissions():
         else:
             # Filter by user if authenticated
             submissions_query = Submission.query.filter_by(submitted_by=user)
-        
+
         total = submissions_query.count()
-        
-        submissions = submissions_query.offset((page - 1) * per_page).limit(per_page).all()
-        
+
+        submissions = submissions_query.order_by(Submission.created_at.desc()).offset((page - 1) * per_page).limit(per_page).all()
+
+        # Build response with validation summary for each submission
+        submissions_data = []
+        for s in submissions:
+            # Get validation results summary
+            validation_results = ValidationResult.query.filter_by(submission_id=s.id).all()
+
+            form_completeness = 0
+            overall_validation_status = 'UNKNOWN'
+            critical_issues = []
+
+            for result in validation_results:
+                try:
+                    details = json.loads(result.result) if result.result else {}
+                except:
+                    details = {}
+
+                # Extract form completeness
+                if 'ADR Validation' in result.check_type or 'Form 44' in result.check_type:
+                    form_completeness = details.get('completeness', 0)
+                    overall_validation_status = result.status
+
+                # Collect critical issues
+                if result.status == 'FAIL' and details.get('critical_issues'):
+                    critical_issues.extend(details.get('critical_issues', []))
+
+            submissions_data.append({
+                'id': s.id,
+                'filename': s.filename,
+                'type': s.submission_type,
+                'status': s.status,
+                'created_at': s.created_at.isoformat() if s.created_at else None,
+                'submitted_by': s.submitted_by,
+                # NEW: Summary data
+                'validation_status': overall_validation_status,
+                'form_completeness': form_completeness,
+                'critical_issues': critical_issues[:3],  # Top 3 issues
+                'checks_count': len(validation_results)
+            })
+
         return jsonify({
-            'submissions': [
-                {
-                    'id': s.id,
-                    'filename': s.filename,
-                    'type': s.submission_type,
-                    'status': s.status,
-                    'created_at': s.created_at.isoformat() if s.created_at else None,
-                    'submitted_by': s.submitted_by
-                }
-                for s in submissions
-            ],
+            'submissions': submissions_data,
             'pagination': {
                 'page': page,
                 'per_page': per_page,
@@ -806,7 +835,7 @@ def get_submissions():
                 'pages': (total + per_page - 1) // per_page
             }
         }), 200
-        
+
     except Exception as e:
         logger.error(f"Get submissions error: {e}")
         return jsonify({'error': str(e)}), 500
