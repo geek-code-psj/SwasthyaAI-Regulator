@@ -1,0 +1,25 @@
+MD-14 MEDICINAL PRODUCT ADVERSE REACTION REPORT
+
+CASE ID: AE001
+
+PATIENT INFORMATION:
+Age: 45
+Gender: M
+Weight: 75 kg
+
+ADVERSE EVENT INFORMATION:
+Term: Severe headache and nausea
+Onset Date: 26-03-10
+Severity: Moderate
+Outcome: Response: Recovering
+Dechallenge Performed: No
+
+MEDICINAL PRODUCT:
+Name: Paracetamol
+Batch Number: Batch: ABC123456
+Dose: 500 mg
+Route: Oral
+Frequency: Twice daily
+
+REPORT INFORMATION:
+Report Date: 2026-02-15

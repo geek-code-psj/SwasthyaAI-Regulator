@@ -1,0 +1,24 @@
+Clinical Adverse Event Report (Complete Case)
+Patient Information:
+Patient Name: Rajesh Kumar
+Age: 52 years
+Gender: Male
+Adverse Event Details:
+Adverse Reaction: Severe hypotension observed after medication
+Onset Date: 12 March 2026
+Drug Information:
+Drug Name: Drug-X12
+Dosage: 50 mg daily
+Route: Oral
+Reporter Information:
+Reporter Name: Dr. Amit Verma
+Hospital: AIIMS New Delhi
+Contact: +91-9876543210
+Regulatory Information:
+Report Date: 15 March 2026
+Ethics Approval: Approved
+CDSCO Status: Ready for Review
+Clinical Notes:
+The patient developed severe hypotension within 48 hours of starting Drug-X12. Immediate
+discontinuation was advised and supportive treatment was initiated. The patient responded
+positively to treatment

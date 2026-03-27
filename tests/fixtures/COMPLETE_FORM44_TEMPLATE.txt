@@ -1,0 +1,111 @@
+================================================================================
+FORM 44 - ADVERSE DRUG REACTION REPORT - COMPLETE EXAMPLE
+================================================================================
+
+PATIENT INFORMATION
+-------------------
+Patient ID: PAT-2026-001234
+Age: 52
+Gender: Female
+Weight: 65 kg
+Date of Birth: 1973-10-15
+
+SUSPECT DRUG INFORMATION
+------------------------
+Drug Name: Paracetamol
+Manufacturer: ABC Pharmaceuticals Ltd
+Generic Name: Acetaminophen
+Batch Number: BATCH-2026-45782
+Expiry Date: 2027-12-31
+Date Drug Started: 2026-02-15
+Date Drug Stopped: 2026-03-12
+Route of Administration: Oral
+Dose: 500 mg
+Frequency: Twice daily (morning and evening)
+Indication: Fever and body ache
+Duration of Therapy: 25 days
+
+SUSPECTED ADVERSE REACTION
+--------------------------
+Reaction Type: Gastrointestinal bleeding
+Adverse Reaction: Severe abdominal pain with blood in stools
+Date of Onset: 2026-02-28
+Onset Date: 2026-02-28
+Duration: 4 days
+Severity: Severe
+Outcome: Hospitalized for 48 hours, required blood transfusion
+Outcome Detail: Patient discharged after stabilization on day 3
+Was Reaction Serious: Yes
+Which Serious Outcome: Hospitalization required
+
+MEDICAL AND DRUG HISTORY
+------------------------
+Past Medical History: Peptic ulcer disease (history), Hypertension (controlled)
+Previous ADR: Allergy to Aspirin (rash)
+Concomitant Medications:
+  - Warfarin 5 mg daily (anticoagulant)
+  - Metoprolol 50 mg twice daily (antihypertensive)
+  - Pantoprazole 20 mg daily (PPI)
+  
+Alcohol Use: Occasional
+Smoking: Non-smoker
+
+REPORTER INFORMATION
+--------------------
+Reporter Name: Dr. Ramesh Kumar Sharma
+Title: Medical Director
+Reporter Phone: +91-9876543210
+Reporter Email: dr.sharma@hospital.com
+Report Date: 2026-03-15
+Date of Report: 2026-03-15
+Other Substance Use: None
+
+ACTION TAKEN WITH SUSPECTED DRUG
+---------------------------------
+Drug Action: immediately withdrawn
+Follow-up Actions Taken: 
+  - Blood transfusion (2 units PRBC)
+  - Proton pump inhibitor therapy initiated
+  - Endoscopy performed (found gastric ulcer with bleeding)
+  - Patient advised to avoid NSAIDs and aspirin in future
+
+DECHALLENGE / RECHALLENGE INFORMATION
+-------------------------------------
+Dechallenge: Yes
+Dechallenge Response: Bleeding stopped within 24 hours of drug withdrawal
+Rechallenge: No
+Reason for No Rechallenge: Risky given patient's medical history and previous reaction
+
+ASSESSMENT OF CAUSALITY
+------------------------
+Temporal Relationship: Consistent (reaction started 13 days after drug initiation)
+Dose Response: Yes (higher dose within therapeutic range)
+Alternative Causes: Interaction with Warfarin possible (known potentiator of bleeding risk)
+Consistency with Literature: Yes (GI bleeding is known ADR of paracetamol in susceptible patients)
+Dechallenge Evidence: Positive (reaction resolved after drug stopped)
+
+CAUSALITY ASSESSMENT: PROBABLE
+
+ADDITIONAL INFORMATION
+----------------------
+Associated Lab Test Values:
+  - Hemoglobin: 7.2 g/dL (normal: 12-16) - LOW
+  - Hematocrit: 22% (normal: 36-46%) - LOW
+  - INR: 4.2 (therapeutic for Warfarin is 2-3) - ELEVATED
+
+Healthcare Provider Information
+Reporter Name: Dr. Rajesh Kumar
+Designation: Senior Medical Officer
+Hospital/Clinic: City General Hospital
+Department: Emergency Medicine
+Contact Number: +91-9876543210
+Email: rajesh.kumar@cityhospital.com
+Reporter Registration Number: REG-2023-4567
+
+Date of Report: 2026-03-27
+Report Type: Initial Report
+Report Status: Complete
+
+================================================================================
+END OF FORM 44
+================================================================================

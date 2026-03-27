@@ -1,0 +1,59 @@
+Case ID: AE001
+Patient Age: 45
+Patient Gender: M
+Adverse Event Term: Severe headache and nausea
+Event Onset Date: 2026-03-10
+Event Severity: Moderate
+Outcome: Recovering
+Drug Name: Drug-X1
+Dose: 50 mg
+Dechallenge Performed: Yes
+Report Date: 2026-03-15
+---
+Case ID: AE002
+Patient Age: 60
+Patient Gender: F
+Adverse Event Term: Life-threatening hypotension
+Event Onset Date: 2026-03-11
+Event Severity: Life-threatening
+Outcome: Not Recovered
+Drug Name: Drug-X2
+Dose: 75 mg
+Dechallenge Performed: Yes
+Report Date: 2026-03-16
+---
+Case ID: AE003
+Patient Age: 30
+Patient Gender: Other
+Adverse Event Term: Mild dizziness
+Event Onset Date: 2026-03-12
+Event Severity: Mild
+Outcome: Recovered
+Drug Name: Drug-X3
+Dose: 25 mg
+Dechallenge Performed: No
+Report Date: 2026-03-17
+---
+Case ID: AE004
+Patient Age: 55
+Patient Gender: M
+Adverse Event Term: Mild rash with itching
+Event Onset Date: 2026-03-13
+Event Severity: Mild
+Outcome: Unknown
+Drug Name: Drug-X4
+Dose: 10 mg
+Dechallenge Performed: Yes
+Report Date: 2026-03-18
+---
+Case ID: AE005
+Patient Age: 50
+Patient Gender: F
+Adverse Event Term: Severe allergic reaction
+Event Onset Date: 2026-03-14
+Event Severity: Severe
+Outcome: Recovering
+Drug Name: Drug-X5
+Dose: 100 mg
+Dechallenge Performed: Yes
+Report Date: 2026-03-19

@@ -126,111 +126,58 @@ class ADRValidator:
             'message': f"{field_name} validated successfully"
         }
 
-    def validate_adr(self, form_data: Dict) -> Dict:
+    def validate_adr(self, form_data: Dict, is_batch: bool = False) -> Dict:
         """
-        Validate complete ADR submission
-
+        Validate ADR submission - STRICT MODE: Check all mandatory fields are present and valid
+        
         Args:
-            form_data: Dictionary with form fields
-
-        Returns:
-            Validation report with field-by-field results
+            form_data: Dictionary with ADR form fields
+            is_batch: If True, reporter_name is optional (for batch MD-14 submissions)
         """
         report = {
             'form_type': 'Form 44 - Adverse Drug Reaction Report',
             'overall_status': 'PASS',
             'completeness_score': 0.0,
-            'mandatory_fields_status': [],
-            'recommended_fields_status': [],
-            'optional_fields_status': [],
             'critical_issues': [],
-            'high_priority_issues': [],
-            'medium_priority_issues': [],
+            'warnings': [],
             'recommendations': []
         }
 
-        # Validate mandatory fields
-        mandatory_passed = 0
-        mandatory_total = len(self.MANDATORY_FIELDS)
+        # Adjust mandatory fields for batch submissions
+        mandatory_fields = dict(self.MANDATORY_FIELDS)
+        if is_batch:
+            # For batch submissions, reporter_name is optional
+            mandatory_fields['reporter_name']['required'] = False
 
-        for field_name, rules in self.MANDATORY_FIELDS.items():
+        # Validate each mandatory field
+        critical_issues = []
+        for field_name, rules in mandatory_fields.items():
             value = form_data.get(field_name)
-            validation = self.validate_field(field_name, value, rules)
-
-            report['mandatory_fields_status'].append(validation)
-
-            if validation['status'] == 'pass':
-                mandatory_passed += 1
-            elif validation['severity'] == 'critical':
-                report['critical_issues'].append(validation['message'])
-                report['overall_status'] = 'FAIL'
-            elif validation['severity'] == 'high':
-                report['high_priority_issues'].append(validation['message'])
+            result = self.validate_field(field_name, value, rules)
+            
+            if result.get('status') == 'missing' or result.get('status') == 'invalid':
+                critical_issues.append(result)
+                report['critical_issues'].append(result['message'])
 
         # Validate recommended fields
-        recommended_passed = 0
-        recommended_total = len(self.RECOMMENDED_FIELDS)
-
         for field_name, rules in self.RECOMMENDED_FIELDS.items():
             value = form_data.get(field_name)
-            validation = self.validate_field(field_name, value, rules)
+            result = self.validate_field(field_name, value, rules)
+            
+            if result.get('status') == 'warning':
+                report['warnings'].append(result['message'])
 
-            report['recommended_fields_status'].append(validation)
+        # Calculate completeness
+        filled_fields = sum(1 for field in self.MANDATORY_FIELDS if form_data.get(field))
+        total_mandatory = len(self.MANDATORY_FIELDS)
+        report['completeness_score'] = round((filled_fields / total_mandatory) * 100, 1) if total_mandatory > 0 else 0
 
-            if validation['status'] == 'pass':
-                recommended_passed += 1
-
-        # Validate optional fields
-        optional_passed = 0
-        optional_total = len(self.OPTIONAL_FIELDS)
-
-        for field_name, rules in self.OPTIONAL_FIELDS.items():
-            value = form_data.get(field_name)
-            validation = self.validate_field(field_name, value, rules)
-
-            report['optional_fields_status'].append(validation)
-
-            if validation['status'] == 'pass':
-                optional_passed += 1
-
-        # Calculate completeness score (weighted)
-        # Mandatory: 70%, Recommended: 20%, Optional: 10%
-        if mandatory_total > 0:
-            mandatory_score = (mandatory_passed / mandatory_total) * 70
+        # Determine overall status
+        if critical_issues:
+            report['overall_status'] = 'FAIL'
+            report['recommendations'].append('Please provide all mandatory fields')
         else:
-            mandatory_score = 0
-
-        if recommended_total > 0:
-            recommended_score = (recommended_passed / recommended_total) * 20
-        else:
-            recommended_score = 0
-
-        if optional_total > 0:
-            optional_score = (optional_passed / optional_total) * 10
-        else:
-            optional_score = 0
-
-        report['completeness_score'] = round(
-            mandatory_score + recommended_score + optional_score, 1
-        )
-
-        # Set recommendations
-        if mandatory_passed < mandatory_total:
-            missing_mandatory = [
-                f['field'] for f in report['mandatory_fields_status']
-                if f['status'] != 'pass'
-            ]
-            report['recommendations'].append(
-                f"Complete mandatory fields: {', '.join(missing_mandatory[:3])}"
-            )
-
-        if report['completeness_score'] >= 90:
-            report['recommendations'].append("ADR report is complete and ready for review")
-        elif report['completeness_score'] >= 70:
-            report['recommendations'].append(
-                f"ADR report is {report['completeness_score']}% complete. Add recommended fields if possible."
-            )
-        else:
-            report['recommendations'].append("Critical fields missing. Cannot process without mandatory information.")
+            report['overall_status'] = 'PASS'
+            report['recommendations'].append(f'ADR report is valid ({report["completeness_score"]}% complete)')
 
         return report

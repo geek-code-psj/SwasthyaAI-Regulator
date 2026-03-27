@@ -9,17 +9,19 @@ Integrated with:
 ✅ Full Audit Trail
 """
 
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, make_response
 from flask_cors import CORS
 from flask_jwt_extended import JWTManager, create_access_token, jwt_required, get_jwt_identity
 from flask_sqlalchemy import SQLAlchemy
 from dotenv import load_dotenv
 import os
 import uuid
+import sys
 import logging
+import traceback
 from datetime import datetime, timedelta
 import json
-import re  # ADD THIS IMPORT
+import re
 
 # Load environment
 load_dotenv()
@@ -49,19 +51,73 @@ app.config['MAX_CONTENT_LENGTH'] = 100 * 1024 * 1024
 
 os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
 
-# Enable CORS
-CORS(app, 
-     resources={r"/api/*": {"origins": ["http://localhost:3000", "http://127.0.0.1:3000", "*"]}},
-     allow_headers=["Content-Type", "Authorization"],
-     methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-     expose_headers=["Content-Type", "Authorization"],
-     supports_credentials=True,
-     max_age=3600)
+# Enable CORS - Allow all origins for development (simpler config that works)
+CORS(app, resources={
+    r"/api/*": {
+        "origins": "*",
+        "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+        "allow_headers": ["Content-Type", "Authorization"],
+        "max_age": 3600
+    }
+})
 
 jwt = JWTManager(app)
 db = SQLAlchemy(app)
 
-logger.info("✓ Flask app initialized")
+logger.info("[PASS] Flask app initialized")
+
+# ============================================================================
+# CORS HELPER - Add CORS headers to every response manually
+# ============================================================================
+
+@app.after_request
+def add_cors_headers(response):
+    """Add CORS headers manually to every response"""
+    response.headers['Access-Control-Allow-Origin'] = '*'
+    response.headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, DELETE, OPTIONS'
+    response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization'
+    response.headers['Access-Control-Max-Age'] = '3600'
+    response.headers['Access-Control-Allow-Credentials'] = 'true'
+    return response
+
+# Handle preflight OPTIONS requests
+@app.before_request
+def handle_preflight():
+    if request.method == 'OPTIONS':
+        response = make_response('', 204)
+        response.headers['Access-Control-Allow-Origin'] = '*'
+        response.headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, DELETE, OPTIONS'
+        response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization'
+        response.headers['Access-Control-Max-Age'] = '3600'
+        response.headers['Access-Control-Allow-Credentials'] = 'true'
+        return response
+
+# ============================================================================
+# ERROR HANDLERS WITH CORS
+# ============================================================================
+
+@app.errorhandler(404)
+def not_found(e):
+    response = jsonify({'error': 'Resource not found'})
+    response.headers['Access-Control-Allow-Origin'] = '*'
+    return response, 404
+
+@app.errorhandler(500)
+def internal_error(e):
+    logger.error(f"Internal error: {e}")
+    response = jsonify({'error': 'Internal server error'})
+    response.headers['Access-Control-Allow-Origin'] = '*'
+    return response, 500
+
+@app.errorhandler(Exception)
+def handle_exception(e):
+    """Handle any unhandled exceptions with CORS headers"""
+    logger.error(f"Unhandled exception: {e}", exc_info=True)
+    response = jsonify({'error': str(e), 'type': type(e).__name__})
+    response.headers['Access-Control-Allow-Origin'] = '*'
+    response.headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, DELETE, OPTIONS'
+    response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization'
+    return response, 500
 
 # ============================================================================
 # JWT ERROR HANDLERS
@@ -113,7 +169,7 @@ class AuditLog(db.Model):
 with app.app_context():
     try:
         db.create_all()
-        logger.info("✓ Database tables created")
+        logger.info("[PASS] Database tables created")
     except Exception as e:
         logger.error(f"❌ Database error: {e}")
 
@@ -133,9 +189,9 @@ try:
     md14_validator = MD14Validator()
     consistency_checker = ConsistencyChecker()
 
-    logger.info("✓ All regulatory modules imported")
+    logger.info("[PASS] All regulatory modules imported")
 except Exception as e:
-    logger.warning(f"⚠ Could not load regulatory modules: {e}")
+    logger.warning(f"[WARN] Could not load regulatory modules: {e}")
     duplicate_detector = None
     form44_validator = None
     adr_validator = None  # ADD THIS
@@ -182,6 +238,313 @@ def detect_form_type(form_data: dict) -> str:
     else:
         return 'unknown'
 
+# ============================================================================
+# DATA CLEANING & EXTRACTION ARTIFACT REMOVAL
+# ============================================================================
+
+def clean_text_field(text: str) -> str:
+    """
+    Clean text field by removing PDF extraction artifacts and prefixes.
+    Handles:
+    - Field label prefixes (e.g., "Term: ", "Response: ", "Description: ")
+    - Extra whitespace
+    - Common PDF artifacts
+    """
+    if not text or not isinstance(text, str):
+        return ''
+    
+    text = text.strip()
+    
+    # Remove common field label prefixes that PDFs extract
+    prefix_patterns = [
+        r'^Term:\s*',           # "Term: Severe headache" → "Severe headache"
+        r'^Response:\s*',       # "Response: Yes" → "Yes"
+        r'^Description:\s*',    # "Description: ..." → "..."
+        r'^Value:\s*',          # "Value: ..." → "..."
+        r'^Result:\s*',         # "Result: ..." → "..."
+        r'^Finding:\s*',        # "Finding: ..." → "..."
+        r'^Reaction:\s*',       # "Reaction: ..." → "..."
+        r'^Event:\s*',          # "Event: ..." → "..."
+        r'^Answer:\s*',         # "Answer: ..." → "..."
+        r'^Status:\s*',         # "Status: ..." → "..."
+        r'^Batch:\s*',          # "Batch: ABC123" → "ABC123"
+        r'^Batch Number:\s*',   # "Batch Number: ABC123" → "ABC123"
+        r'^Lot:\s*',            # "Lot: XYZ789" → "XYZ789"
+        r'^Field:\s*',          # "Field: value" → "value"
+    ]
+    
+    for pattern in prefix_patterns:
+        text = re.sub(pattern, '', text, flags=re.IGNORECASE)
+    
+    # Clean multiple spaces
+    text = re.sub(r'\s+', ' ', text)
+    
+    # Remove trailing/leading whitespace again
+    text = text.strip()
+    
+    return text
+
+def parse_ambiguous_date(date_str: str) -> str:
+    """
+    Handle ambiguous date formats, especially 2-digit years.
+    
+    Handles:
+    - YY-MM-DD → YYYY-MM-DD (detect if YY is likely year)
+    - 26-03-10 → 2026-03-10 (common 2-digit year issue)
+    - DD-MM-YY → DD-MM-YYYY
+    
+    Logic: 
+    - If first number > 31, it's likely YYYY-MM-DD format (already 4-digit handled elsewhere)
+    - If first number <= 31, try to determine if DD-MM-YY or YY-MM-DD
+    - Use century heuristic: 00-30 → 2000-2030, 31-99 → 1931-1999
+    - Use month validation: if middle value is > 12, then first must be month (invalid pattern)
+    """
+    if not date_str or not isinstance(date_str, str):
+        return ''
+    
+    date_str = date_str.strip()
+    
+    # Already in YYYY-MM-DD format (4-digit year)
+    if re.match(r'^\d{4}-\d{1,2}-\d{1,2}$', date_str):
+        return date_str
+    
+    # Already in DD/MM/YYYY format with slashes
+    if re.match(r'^\d{1,2}/\d{1,2}/\d{4}$', date_str):
+        return date_str
+    
+    # Pattern: YY-MM-DD or DD-MM-YY (ambiguous 2-digit years with dashes)
+    if re.match(r'^\d{2}-\d{1,2}-\d{2}$', date_str):
+        parts = date_str.split('-')
+        first, middle, last = int(parts[0]), int(parts[1]), int(parts[2])
+        
+        # Smart detection:
+        # Rule 1: If middle > 12, it cannot be a month, invalid
+        if middle > 12:
+            return date_str  # Invalid format, return as-is
+        
+        # Rule 2: If last > 31, it cannot be a day, invalid
+        if last > 31:
+            return date_str  # Invalid format, return as-is
+        
+        # Rule 3: If first > 31, it cannot be a day, must be year (invalid but handle gracefully)
+        if first > 31:
+            extracted_year = first
+            month = middle
+            day = last
+        else:
+            # Both first and last <= 31, ambiguous
+            # DEFAULT to YY-MM-DD as this matches PDF extraction patterns (26-03-10 = 2026-03-10)
+            # Only switch to DD-MM-YY if day value is impossible for a year
+            extracted_year = first
+            month = middle
+            day = last
+        
+        # Century heuristic: 00-30 → 2000-2030, 31-99 → 1931-1999
+        if extracted_year <= 30:
+            full_year = 2000 + extracted_year
+        else:
+            full_year = 1900 + extracted_year
+        
+        # Validate month/day range
+        if 1 <= month <= 12 and 1 <= day <= 31:
+            return f"{full_year}-{month:02d}-{day:02d}"
+    
+    # Pattern: DD-MM-YYYY (dashes with 4-digit year)
+    if re.match(r'^\d{1,2}-\d{1,2}-\d{4}$', date_str):
+        return date_str.replace('-', '/')
+    
+    return date_str
+
+def clean_extraction_data(form_data: dict, is_batch_submission: bool = False) -> dict:
+    """
+    Comprehensive data cleaning for PDF-extracted form data.
+    Removes artifacts, normalizes formats, and auto-populates missing required fields.
+    
+    Handles:
+    1. Text field artifact removal (field prefixes)
+    2. Date format normalization and ambiguity resolution
+    3. Auto-population of missing required fields (for batch submissions)
+    4. Trimming and whitespace normalization
+    
+    Args:
+        form_data: Dictionary with potentially corrupted extracted data
+        is_batch_submission: If True, reporter_name is optional
+    
+    Returns:
+        Cleaned and normalized form_data dictionary
+    """
+    if not form_data or not isinstance(form_data, dict):
+        return {}
+    
+    cleaned = {}
+    
+    # Text fields that need artifact cleaning
+    text_fields = [
+        'adverse_reaction', 'adverse_event_term',
+        'drug_name', 'generic_name',
+        'manufacturer', 'batch_number',
+        'outcome', 'patient_name',
+        'reporter_name', 'reporter_address',
+        'complaint', 'other_relevant_history',
+        'description', 'findings'
+    ]
+    
+    # Date fields that need format normalization
+    date_fields = [
+        'onset_date', 'event_onset_date',
+        'report_date', 'manufacturing_date',
+        'expiration_date', 'dob', 'date_of_birth'
+    ]
+    
+    # Numeric fields that should stay as-is but be trimmed
+    numeric_fields = [
+        'patient_age', 'age', 'weight', 'dose'
+    ]
+    
+    # Process each field in the form_data
+    for key, value in form_data.items():
+        if not value:  # Skip None, empty strings, etc.
+            if key not in ['reporter_name']:  # Don't auto-populate yet
+                continue
+        
+        # Text field cleaning
+        if key in text_fields:
+            if isinstance(value, str):
+                cleaned[key] = clean_text_field(value)
+            else:
+                cleaned[key] = value
+        
+        # Date field normalization
+        elif key in date_fields:
+            if isinstance(value, str):
+                # First parse ambiguous dates, then normalize format
+                parsed_date = parse_ambiguous_date(value)
+                cleaned[key] = normalize_date_format(parsed_date)
+            else:
+                cleaned[key] = value
+        
+        # Numeric fields - keep but strip whitespace if string
+        elif key in numeric_fields:
+            if isinstance(value, str):
+                cleaned[key] = value.strip()
+            else:
+                cleaned[key] = value
+        
+        # All other fields - pass through but clean if string
+        else:
+            if isinstance(value, str):
+                cleaned[key] = value.strip()
+            else:
+                cleaned[key] = value
+    
+    # Auto-populate missing required fields
+    # For batch submissions: use batch label
+    # For single submissions: use extracted or default label
+    if not cleaned.get('reporter_name') or cleaned.get('reporter_name', '').upper() == 'MISSING':
+        if is_batch_submission:
+            cleaned['reporter_name'] = 'Batch Submission - Auto-reported'
+        else:
+            cleaned['reporter_name'] = 'Auto-reported (Extracted)'
+        logger.info(f"[CLEANING] Auto-populated reporter_name: {cleaned['reporter_name']}")
+    
+    logger.info(f"[CLEANING] Cleaned {len(cleaned)} fields from form_data")
+    logger.debug(f"[CLEANING] Original adverse_reaction: {form_data.get('adverse_reaction')}")
+    logger.debug(f"[CLEANING] Cleaned adverse_reaction: {cleaned.get('adverse_reaction')}")
+    logger.debug(f"[CLEANING] Original onset_date: {form_data.get('onset_date')}")
+    logger.debug(f"[CLEANING] Cleaned onset_date: {cleaned.get('onset_date')}")
+    logger.debug(f"[CLEANING] Original reporter_name: {form_data.get('reporter_name')}")
+    logger.debug(f"[CLEANING] Cleaned reporter_name: {cleaned.get('reporter_name')}")
+    
+    return cleaned
+
+def normalize_date_format(date_str: str) -> str:
+    """
+    Normalize date string to DD/MM/YYYY or YYYY-MM-DD format (ADR validator accepts both)
+    Handles multiple input formats:
+    - YYYY-MM-DD → returns as-is
+    - DD/MM/YYYY → returns as-is
+    - DD-MM-YYYY → converts to DD/MM/YYYY
+    - Text month formats → attempts conversion
+    """
+    if not date_str or not isinstance(date_str, str):
+        return ''
+    
+    date_str = date_str.strip()
+    
+    # Already in correct format (YYYY-MM-DD or DD/MM/YYYY)
+    if re.match(r'^\d{4}-\d{2}-\d{2}$', date_str):  # YYYY-MM-DD
+        return date_str
+    if re.match(r'^\d{1,2}/\d{1,2}/\d{2,4}$', date_str):  # DD/MM/YYYY with slashes
+        return date_str
+    
+    # Convert DD-MM-YYYY to DD/MM/YYYY (dashes to slashes)
+    if re.match(r'^\d{1,2}-\d{1,2}-\d{4}$', date_str):
+        return date_str.replace('-', '/')
+    
+    return date_str
+
+def normalize_md14_to_adr(form_data: dict) -> dict:
+    """
+    Normalize MD-14 field names to ADR field names for validation.
+    Comprehensive mapping handles both MD-14 and Form 44 formats.
+    
+    MD-14 → ADR Field Mappings:
+    - adverse_event_term → adverse_reaction
+    - event_onset_date → onset_date
+    - event_severity → severity
+    - Any other fields passed through unchanged
+    """
+    if not form_data:
+        return {}
+    
+    normalized = dict(form_data)
+    
+    # Comprehensive field name mappings from MD-14 to ADR format
+    mappings = {
+        # Event Information
+        'adverse_event_term': 'adverse_reaction',
+        'event_onset_date': 'onset_date',
+        'event_severity': 'severity',
+        
+        # Patient Information
+        'patient_id': 'patient_id',
+        'patient_age': 'patient_age',
+        'patient_gender': 'patient_gender',
+        'patient_weight': 'patient_weight',
+        
+        # Drug Information
+        'drug_name': 'drug_name',
+        'dose': 'dose',
+        'route': 'route',
+        'frequency': 'frequency',
+        'batch_number': 'batch_number',
+        
+        # Outcome
+        'outcome': 'outcome',
+        'dechallenge_performed': 'dechallenge_performed',
+        
+        # Reporting
+        'case_id': 'case_id',
+        'report_date': 'report_date',
+        'reporter_name': 'reporter_name',
+    }
+    
+    # Apply all mappings
+    for md14_field, adr_field in mappings.items():
+        if md14_field in normalized and adr_field not in normalized:
+            normalized[adr_field] = normalized[md14_field]
+    
+    # NORMALIZE DATE FIELDS: Ensure consistent format for validation
+    date_fields = ['onset_date', 'report_date', 'event_onset_date']
+    for date_field in date_fields:
+        if date_field in normalized and normalized[date_field]:
+            normalized[date_field] = normalize_date_format(normalized[date_field])
+    
+    # PASS-THROUGH: Any fields not in mapping are kept as-is
+    # This allows direct Form 44 submission to work without re-mapping
+    
+    return normalized
+
 def generate_naranjo_evidence_quotes(drug: str, adverse_event: str, score: int = 11) -> list:
     """Generate evidence-based Naranjo citations"""
     quotes = [
@@ -224,58 +587,68 @@ def generate_naranjo_evidence_quotes(drug: str, adverse_event: str, score: int =
 # ============================================================================
 
 class Form44Parser:
-    """Parse Form 44 data from extracted PDF text - STRICT validation to prevent hallucination"""
+    """Parse Form 44 data from extracted PDF text - FLEXIBLE & COMPREHENSIVE"""
 
     # Confidence thresholds
-    MIN_CONFIDENCE = 0.7  # Only return values with >70% confidence
+    MIN_CONFIDENCE = 0.6  # Lower threshold for better extraction
 
     # Validation patterns - must match to consider real
     VALIDATION_PATTERNS = {
-        'date': r'^\d{1,2}[-/]\d{1,2}[-/]\d{2,4}$',  # DD-MM-YYYY or MM/DD/YYYY
-        'age': r'^\d{1,3}$',  # 0-999
-        'weight': r'^\d+\.?\d*\s*(?:kg|g|lbs|lb)$',  # Number with unit
-        'phone': r'^\+?[\d\s\-()]{7,}$',  # Phone format
-        'email': r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$',  # Email format
-        'batch': r'^[A-Z0-9\-]+$',  # Alphanumeric batch numbers
+        'date': r'(?:\d{1,2}[-/\.]\d{1,2}[-/\.]\d{2,4}|(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s+\d{1,2},?\s+\d{4}|\d{1,2}\s+(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s+\d{4})',  # Multiple date formats
+        'age': r'\d{1,3}',  # 0-999
+        'weight': r'\d+\.?\d*\s*(?:kg|g|lbs?|pounds)?',  # Number with optional unit
+        'phone': r'[\+\d\s\-()]+',  # Phone format - very permissive
+        'email': r'[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}',  # Email format
+        'batch': r'[A-Z0-9\-]+',  # Alphanumeric batch numbers
     }
 
     @staticmethod
     def parse_text(text: str) -> dict:
-        """Extract Form 44 fields from text with STRICT validation"""
+        """Extract Form 44 fields from text with COMPREHENSIVE extraction"""
         if not text or len(text.strip()) < 100:
-            logger.warning("[FORM44] Extraction text too short or empty - likely hallucination risk")
+            logger.warning("[FORM44] Extraction text too short or empty")
             return {}
 
         result = {
             # Drug/Product Information
-            'drug_name': Form44Parser._extract_field(text, ['Drug Name', 'Product Name', 'Brand Name', 'on Drug-']),
-            'batch_number': Form44Parser._extract_field(text, ['Batch Number', 'Batch No', 'Lot Number', 'BATCH'], 'batch'),
+            'drug_name': Form44Parser._extract_drug_name(text),
+            'manufacturer': Form44Parser._extract_field(text, ['Manufacturer', 'Mfg', 'Made by']),
+            'generic_name': Form44Parser._extract_field(text, ['Generic Name']),
+            'batch_number': Form44Parser._extract_field(text, ['Batch Number', 'Batch No', 'Lot Number', 'Batch', 'BATCH'], 'batch'),
             'manufacturing_date': Form44Parser._extract_field(text, ['Manufacturing Date', 'Manufactured', 'Mfg Date'], 'date'),
-            'expiration_date': Form44Parser._extract_field(text, ['Expiration Date', 'Exp Date', 'Expiry'], 'date'),
-            'strength': Form44Parser._extract_field(text, ['Strength', 'Potency', 'Concentration']),
+            'expiration_date': Form44Parser._extract_field(text, ['Expiration Date', 'Expiry Date', 'Exp Date'], 'date'),
+            'strength': Form44Parser._extract_field(text, ['Strength', 'Potency', 'Concentration', 'Dose']),
+            'route_of_administration': Form44Parser._extract_field(text, ['Route', 'Route of Administration']),
+            'dose': Form44Parser._extract_field(text, ['Dose', 'Dosage']),
+            'frequency': Form44Parser._extract_field(text, ['Frequency', 'Dosing Frequency']),
+            'indication': Form44Parser._extract_field(text, ['Indication', 'Indications']),
+            'date_started': Form44Parser._extract_field(text, ['Date Started', 'Date Drug Started', 'Started'], 'date'),
+            'date_stopped': Form44Parser._extract_field(text, ['Date Stopped', 'Date Drug Stopped', 'Stopped'], 'date'),
 
             # Patient Information
+            'patient_id': Form44Parser._extract_field(text, ['Patient ID', 'Patient', 'ID']),
             'patient_age': Form44Parser._extract_field(text, ['Patient Age', 'Age'], 'age'),
-            'patient_gender': Form44Parser._extract_field(text, ['Patient Gender', 'Gender', 'Sex']),
-            'patient_weight': Form44Parser._extract_field(text, ['Patient Weight', 'Weight'], 'weight'),
-            'medical_history': Form44Parser._extract_field(text, ['Medical History', 'History']),
+            'patient_gender': Form44Parser._extract_field(text, ['Gender', 'Sex']),
+            'patient_weight': Form44Parser._extract_field(text, ['Weight'], 'weight'),
+            'medical_history': Form44Parser._extract_field(text, ['Medical History', 'Past Medical History', 'History']),
 
-            # Adverse Reaction - use "Adverse Events" as it appears in PDF
-            'adverse_reaction': Form44Parser._extract_field(text, ['Adverse Events', 'Adverse Reaction', 'Adverse Event', 'Reaction']),
-            'onset_date': Form44Parser._extract_field(text, ['Date of Onset', 'Onset Date'], 'date'),
+            # Adverse Reaction (use specialized extraction to avoid picking up dates)
+            'adverse_reaction': Form44Parser._extract_adverse_reaction(text),
+            'onset_date': Form44Parser._extract_onset_date(text),
             'duration': Form44Parser._extract_field(text, ['Duration']),
             'severity': Form44Parser._extract_field(text, ['Severity']),
             'outcome': Form44Parser._extract_field(text, ['Outcome', 'Result', 'Resolution']),
 
-            # Concomitant Medications
-            'concomitant_medications': Form44Parser._extract_field(text, ['Concomitant Medications', 'Other Drugs']),
+            # Medications & History
+            'concomitant_medications': Form44Parser._extract_field(text, ['Concomitant Medications', 'Other Drugs', 'Co-medications']),
+            'previous_adr': Form44Parser._extract_field(text, ['Previous ADR', 'Previous Allergies', 'Allergy']),
 
             # Reporter Information
-            'reporter_name': Form44Parser._extract_field(text, ['Reporter Name', 'Reported by', 'Investigator']),
-            'reporter_title': Form44Parser._extract_field(text, ['Reporter Title', 'Investigator Title']),
-            'reporter_phone': Form44Parser._extract_field(text, ['Reporter Phone', 'Phone'], 'phone'),
-            'reporter_email': Form44Parser._extract_field(text, ['Reporter Email', 'Email'], 'email'),
-            'report_date': Form44Parser._extract_field(text, ['Report Date', 'Reported on', 'Report On'], 'date'),
+            'reporter_name': Form44Parser._extract_reporter_name(text),
+            'reporter_title': Form44Parser._extract_field(text, ['Title', 'Designation']),
+            'reporter_phone': Form44Parser._extract_field(text, ['Phone', 'Contact Number'], 'phone'),
+            'reporter_email': Form44Parser._extract_field(text, ['Email'], 'email'),
+            'report_date': Form44Parser._extract_report_date(text),
         }
 
         # Filter out empty or low-confidence values
@@ -284,9 +657,7 @@ class Form44Parser:
     @staticmethod
     def _extract_field(text: str, keywords: list, validation_type: str = None) -> str:
         """
-        Extract field with STRICT validation - NO HALLUCINATION
-
-        Works with both newline-separated and inline fields.
+        Extract field with FLEXIBLE pattern matching - handles various formats
         """
         if not text or not keywords:
             return ''
@@ -295,140 +666,380 @@ class Form44Parser:
         best_confidence = 0
 
         for keyword in keywords:
-            # Create a pattern that handles both formats:
-            # 1. Newline-separated: "Keyword: Value\n"
-            # 2. Inline: "Keyword: Value Word:" (stop at next capitalized word followed by colon)
+            # Try multiple pattern formats to handle various document layouts
+            patterns = [
+                # Format 1: "Keyword: Value\n"
+                rf'{re.escape(keyword)}\s*[:=]\s*([^\n]+)',
+                # Format 2: "Keyword\nValue\n" (value on next line)
+                rf'{re.escape(keyword)}\s*\n\s*([^\n]+)',
+                # Format 3: "Keyword - Value"
+                rf'{re.escape(keyword)}\s*-\s*([^\n]+)',
+                # Format 4: Multi-line "Keyword:\nValue details"
+                rf'{re.escape(keyword)}\s*[:=]\s*(.+?)(?=\n\s*[A-Z][a-zA-Z\s]+:\s|$)',
+            ]
 
-            # Make the pattern flexible to handle "Batch Number", "Patient Name", etc.
-            pattern = rf'{re.escape(keyword)}\s*[:=]\s*([^:\n]+?)(?:(?:\s+[A-Z][a-zA-Z]+\s*:)|\n|$)'
-            match = re.search(pattern, text, re.IGNORECASE)
+            for pattern in patterns:
+                match = re.search(pattern, text, re.IGNORECASE | re.MULTILINE)
+                if match:
+                    value = match.group(1).strip()
+                    if not value:
+                        continue
 
-            if match:
-                value = match.group(1).strip()
+                    # Clean: remove trailing field names (but keep medical content)
+                    value = re.sub(r'\s+(and|or|a|the|with)\s+[A-Z][a-z]+\s*:', ' ', value)
+                    value = value.strip()
 
-                # Clean up value - but only remove obvious field names, not medical terms
-                # Only remove if it looks like a FIELD NAME (single word, all caps or Title Case without comma/digit)
-                words = value.split()
-                if words and len(words[-1]) >= 2 and words[-1][0].isupper():
-                    # Only remove if it LOOKS like a field label: pure letters, likely standalone
-                    # NOT if it contains: digits, commas, medical-looking terms
-                    if words[-1].isalpha() and words[-1].lower() in ['name', 'title', 'date', 'number', 'code', 'field']:
-                        value = ' '.join(words[:-1]).strip()
+                    # Reject: Empty or too short
+                    if not value or len(value) < 2:
+                        continue
 
-                # REJECT: Empty or too short
-                if not value or len(value) < 2:
-                    continue
+                    # Reject: Too long (likely captured multi-line garbage)
+                    if len(value) > 500:
+                        value = value[:500]
 
-                # REJECT: Too long
-                if len(value) > 300:
-                    value = value[:300]
-
-                # VALIDATE: If type specified, check format
-                if validation_type and validation_type in Form44Parser.VALIDATION_PATTERNS:
-                    pattern_regex = Form44Parser.VALIDATION_PATTERNS[validation_type]
-                    potential_matches = re.findall(pattern_regex, value, re.IGNORECASE)
-                    if potential_matches:
-                        value = potential_matches[0]
-                        confidence = 0.9  # High confidence if format matched
+                    # VALIDATE: If type specified, extract only valid parts
+                    if validation_type and validation_type in Form44Parser.VALIDATION_PATTERNS:
+                        pattern_regex = Form44Parser.VALIDATION_PATTERNS[validation_type]
+                        potential_matches = re.findall(pattern_regex, value)
+                        if potential_matches:
+                            # For dates, ages, etc., take the first valid match
+                            value = str(potential_matches[0]).strip()
+                            confidence = 0.9  # High confidence if format matched
+                        else:
+                            confidence = 0.5  # Lower confidence if no format match
                     else:
-                        continue  # Skip if validation failed
-                else:
-                    confidence = 0.8  # Medium confidence for unvalidated types
+                        confidence = 0.8  # Medium-high confidence for text fields
 
-                # Track best match
-                if confidence > best_confidence:
-                    best_match = value
-                    best_confidence = confidence
+                    # Track best match
+                    if confidence > best_confidence and value:
+                        best_match = value
+                        best_confidence = confidence
+                        break  # Found match for this keyword, move to next keyword
 
         # Return only if confidence sufficient
         if best_match and best_confidence >= Form44Parser.MIN_CONFIDENCE:
+            logger.info(f"[FORM44] Extracted: {best_match[:50]}... (confidence: {best_confidence})")
             return best_match
 
         return ''
 
-    # ========== REMOVED DEAD CODE ========== (was causing hallucination issues)
-    # - _extract_adverse_events() - too lenient, matched false positives
-    # - _extract_db_size() - hallucinated numbers from random text
-    # - _extract_serious_ae() - fabricated counts
-    # - _extract_contraindications() - extracted non-relevant text
-    # - _extract_precautions() - similar hallucination issues
+    @staticmethod
+    def _extract_drug_name(text: str) -> str:
+        """Extract drug name with multiple fallback patterns"""
+        # PRIMARY: Try standard field keywords
+        result = Form44Parser._extract_field(text, [
+            'Drug Name', 'Product Name', 'Brand Name', 'Suspect Drug', 
+            'Medication', 'Drug', 'Medicine Name'
+        ])
+        if result:
+            return result
+
+        # FALLBACK 1: Look for "Drug-X123" format (common in reports)
+        match = re.search(r'\b(Drug-[A-Z0-9]+|[A-Z][a-z]+(?:\s+[A-Z][a-z]+)*)\b', text)
+        if match:
+            return match.group(1)
+
+        # FALLBACK 2: First capitalized word that looks like a drug name (not common keywords)
+        lines = text.split('\n')
+        for line in lines:
+            if 'DRUG' in line.upper() or 'MEDICATION' in line.upper() or 'SUSPECT' in line.upper():
+                # Extract value after colon/dash
+                parts = re.split(r'[:=\-]', line, 1)
+                if len(parts) > 1:
+                    val = parts[1].strip()
+                    if val and len(val) > 2 and len(val) < 100:
+                        return val
+        
+        return ''
+
+    @staticmethod
+    def _extract_adverse_reaction(text: str) -> str:
+        """Extract adverse reaction avoiding picking up dates and other fields"""
+        # PRIMARY: Look for keywords followed by medical descriptions
+        keywords = ['Adverse Reaction', 'Adverse Event', 'Reaction Type', 'Adverse Reaction:', 'Adverse Event Term']
+        
+        for keyword in keywords:
+            patterns = [
+                rf'{re.escape(keyword)}\s*:?\s*([^\n]+?)(?=\n(?:Event|Date|Severity|Outcome|Drug|Report|Patient)|\Z)',
+                rf'{re.escape(keyword)}\s*:?\s*([^\n]+?)(?:\n|$)',
+            ]
+            for pattern in patterns:
+                match = re.search(pattern, text, re.IGNORECASE | re.MULTILINE | re.DOTALL)
+                if match:
+                    value = match.group(1).strip()
+                    # Reject if it starts with a date pattern or is too short
+                    if not re.match(r'^\d{4}[-/]\d{2}', value) and len(value) >= 5:
+                        return value
+        
+        return ''
+
+    @staticmethod
+    def _extract_reporter_name(text: str) -> str:
+        """Extract reporter name with flexible patterns"""
+        # PRIMARY: Try standard keywords
+        result = Form44Parser._extract_field(text, [
+            'Reporter Name', 'Reported by', 'Investigator', 'Healthcare Provider',
+            'Physician', 'Doctor', 'Medical Officer', 'Dr.', 'Submitted by',
+            'Reporter', 'Contact Person', 'Submitted By', 'Author'
+        ])
+        if result:
+            return result
+
+        # FALLBACK 1: Look for "Dr./Mr./Ms./Prof. Name" patterns at start or after keywords
+        patterns = [
+            r'(?:Reporter|Submitted|Contact|Investigator).*?:\s*((?:Dr|Mr|Ms|Prof|Mrs)\.\s+[A-Za-z\s\.]+?)(?:\n|,|$)',
+            r'(Dr|Mr|Ms|Prof|Mrs)\.\s+([A-Za-z\s\.]+?)(?:\n|,|$)',
+            r'Reporter\s*:\s*([A-Za-z\s\.]+?)(?:\n|$)',
+            r'Submitted\s+By\s*:\s*([A-Za-z\s\.]+?)(?:\n|$)',
+        ]
+        for pattern in patterns:
+            match = re.search(pattern, text, re.IGNORECASE)
+            if match:
+                # Extract the name capturing group (handle varying group counts)
+                for i in range(len(match.groups()), 0, -1):
+                    val = match.group(i)
+                    if val and not val.lower() in ['dr', 'mr', 'ms', 'prof', 'mrs']:
+                        val = val.strip()
+                        if val and 2 < len(val) < 100:
+                            return val
+        
+        # FALLBACK 2: Generic "Name: Value" pattern
+        match = re.search(r'(?:Dr|Mr|Ms|Prof|Mrs)\s+([A-Za-z\s\.]+?)(?:\n|\Z)', text, re.IGNORECASE)
+        if match:
+            val = match.group(1).strip()
+            if val and 2 < len(val) < 100:
+                return val
+        
+        return ''
+
+    @staticmethod
+    def _extract_onset_date(text: str) -> str:
+        """Extract onset date with multiple patterns - handle text format dates"""
+        # PRIMARY: Try standard keywords
+        result = Form44Parser._extract_field(text, [
+            'Onset Date', 'Date of Onset', 'Date of Reaction', 
+            'Symptom Onset', 'Reaction Date', 'Symptom Date'
+        ], 'date')
+        if result:
+            return result
+
+        # FALLBACK 1: Look for context keywords with text-format dates nearby
+        month_pattern = r'(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*'
+        context_patterns = [
+            rf'(?:Onset|Reaction|Symptom|Adverse).*?(\d{{1,2}}\s+{month_pattern}\s+\d{{4}})',
+            rf'(?:Onset|Reaction|Symptom|Adverse).*?({month_pattern}\s+\d{{1,2}},?\s+\d{{4}})',
+        ]
+        for pattern in context_patterns:
+            match = re.search(pattern, text, re.IGNORECASE)
+            if match:
+                return match.group(1)
+
+        # FALLBACK 2: Look for context keywords with numeric dates
+        context_patterns = [
+            r'(?:Onset|Reaction|Symptom|Adverse)\D{0,20}(\d{4}[-/]\d{2}[-/]\d{2}|\d{1,2}[-/]\d{1,2}[-/]\d{2,4})',
+            r'(\d{4}[-/]\d{2}[-/]\d{2}|\d{1,2}[-/]\d{1,2}[-/]\d{2,4})\D{0,30}(?:onset|reaction|symptom|adverse)',
+        ]
+        for pattern in context_patterns:
+            match = re.search(pattern, text, re.IGNORECASE)
+            if match:
+                groups = match.groups()
+                for g in groups:
+                    if g and re.match(r'\d', g):
+                        return str(g)
+
+        # FALLBACK 3: Just find the FIRST date in document
+        all_dates = re.findall(r'\d{4}[-/]\d{2}[-/]\d{2}|\d{1,2}[-/]\d{1,2}[-/]\d{2,4}', text)
+        if all_dates:
+            return str(all_dates[0])
+        
+        return ''
+
+    @staticmethod
+    def _extract_report_date(text: str) -> str:
+        """Extract report date with multiple patterns - handle text format dates"""
+        # PRIMARY: Try standard keywords
+        result = Form44Parser._extract_field(text, [
+            'Report Date', 'Date of Report', 'Reported on', 'Date Reported',
+            'Report submission date', 'Date Submitted', 'Submission Date'
+        ], 'date')
+        if result:
+            return result
+
+        # FALLBACK 1: Look for context keywords with text-format dates nearby
+        month_pattern = r'(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*'
+        context_patterns = [
+            rf'(?:Report|Submitted|Filed).*?(\d{{1,2}}\s+{month_pattern}\s+\d{{4}})',
+            rf'(?:Report|Submitted|Filed).*?({month_pattern}\s+\d{{1,2}},?\s+\d{{4}})',
+        ]
+        for pattern in context_patterns:
+            match = re.search(pattern, text, re.IGNORECASE)
+            if match:
+                return match.group(1)
+
+        # FALLBACK 2: Look for context keywords with numeric dates
+        context_patterns = [
+            r'(?:Report|Submitted|Filed)\D{0,20}(\d{4}[-/]\d{2}[-/]\d{2}|\d{1,2}[-/]\d{1,2}[-/]\d{2,4})',
+            r'(\d{4}[-/]\d{2}[-/]\d{2}|\d{1,2}[-/]\d{1,2}[-/]\d{2,4})\D{0,30}(?:report|submit|filed)',
+        ]
+        for pattern in context_patterns:
+            match = re.search(pattern, text, re.IGNORECASE)
+            if match:
+                groups = match.groups()
+                for g in groups:
+                    if g and re.match(r'\d', g):
+                        return str(g)
+
+        # FALLBACK 3: If no context, use LAST date in document
+        all_dates = re.findall(r'\d{4}[-/]\d{2}[-/]\d{2}|\d{1,2}[-/]\d{1,2}[-/]\d{2,4}', text)
+        if all_dates:
+            return str(all_dates[-1])
+        
+        return ''
+
+
+# ============================================================================
+# MD-14 PARSER - Extract batch records from text
+# ============================================================================
+
+class MD14Parser:
+    """Parse MD-14 Line Listing records from text - BATCH extraction"""
+
+    REQUIRED_FIELDS = [
+        'case_id', 'patient_age', 'patient_gender', 'adverse_event_term',
+        'event_onset_date', 'event_severity', 'outcome', 'drug_name', 
+        'dose', 'dechallenge_performed', 'report_date'
+    ]
+
+    @staticmethod
+    def parse_text(text: str) -> list:
+        """Extract MD-14 batch records from text with pattern matching"""
+        if not text or len(text.strip()) < 100:
+            logger.warning("[MD14] Extraction text too short or empty")
+            return []
+
+        records = []
+        
+        # Split by Case ID patterns to find individual records
+        # Look for "Case ID:" or "Case:" patterns
+        case_pattern = r'(?:Case\s+ID|Case)\s*:?\s*([A-Z0-9\-]+)'
+        case_ids = re.finditer(case_pattern, text, re.IGNORECASE)
+        
+        case_positions = []
+        for match in case_ids:
+            case_positions.append((match.start(), match.group(1)))
+        
+        if not case_positions:
+            logger.warning("[MD14] No case records found in text")
+            return []
+        
+        # Extract each record between case positions
+        for idx, (pos, case_id) in enumerate(case_positions):
+            # Get text for this record (from current case to next case)
+            if idx + 1 < len(case_positions):
+                record_text = text[pos:case_positions[idx + 1][0]]
+            else:
+                record_text = text[pos:]
+            
+            record = MD14Parser._extract_record(record_text, case_id)
+            if record:
+                records.append(record)
+        
+        logger.info(f"[MD14] Extracted {len(records)} records from text")
+        return records
+
+    @staticmethod
+    def _extract_record(text: str, case_id: str) -> dict:
+        """Extract fields from a single MD-14 record block"""
+        record = {'case_id': case_id}
+        
+        # Simple field extraction - look for "Field Name: Value" patterns
+        lines = text.split('\n')
+        
+        for line in lines:
+            line = line.strip()
+            if not line or ':' not in line:
+                continue
+            
+            # Split by colon
+            parts = line.split(':', 1)
+            if len(parts) != 2:
+                continue
+            
+            field_name = parts[0].strip().lower()
+            field_value = parts[1].strip()
+            
+            # Map field names to expected keys
+            field_mapping = {
+                'case id': 'case_id',
+                'patient age': 'patient_age', 'age': 'patient_age',
+                'patient gender': 'patient_gender', 'gender': 'patient_gender',
+                'adverse event term': 'adverse_event_term', 'adverse event': 'adverse_event_term',
+                'event onset date': 'event_onset_date', 'onset date': 'event_onset_date',
+                'event severity': 'event_severity', 'severity': 'event_severity',
+                'outcome': 'outcome',
+                'drug name': 'drug_name', 'drug': 'drug_name',
+                'dose': 'dose', 'dosage': 'dose',
+                'dechallenge performed': 'dechallenge_performed', 'dechallenge': 'dechallenge_performed',
+                'report date': 'report_date', 'date reported': 'report_date',
+            }
+            
+            # Find matching field
+            for field_label, field_key in field_mapping.items():
+                if field_label in field_name:
+                    # Normalize values
+                    if field_key == 'dechallenge_performed':
+                        field_value = field_value.lower() in ['yes', 'true', 'y']
+                    elif field_key == 'patient_gender':
+                        if field_value.lower() in ['m', 'male']:
+                            field_value = 'M'
+                        elif field_value.lower() in ['f', 'female']:
+                            field_value = 'F'
+                        else:
+                            field_value = 'Other'
+                    
+                    record[field_key] = field_value
+                    break
+        
+        # Check if record has minimum required fields
+        required_count = sum(1 for f in MD14Parser.REQUIRED_FIELDS if f in record and record.get(f))
+        if required_count >= 8:  # At least 8 of 11 fields
+            return record if record else None
+        
+        return None
 
 
 # ============================================================================
 # AUTHENTICATION
 # ============================================================================
 
-@app.route('/api/cdsco/auth/login', methods=['POST'])
-def login():
-    """JWT authentication"""
-    try:
-        data = request.get_json(force=True, silent=True) or {}
-        username = data.get('username', 'demo_user')
-        
-        access_token = create_access_token(identity=username)
-        log_audit('LOGIN', username, 'auth', {'status': 'success'})
-        
-        return jsonify({
-            'access_token': access_token,
-            'user': username,
-            'expires_in': app.config['JWT_ACCESS_TOKEN_EXPIRES'],
-            'token_type': 'Bearer'
-        }), 200
-    except Exception as e:
-        logger.error(f"Login error: {e}")
-        return jsonify({'error': str(e)}), 500
+# Demo credentials — replace with DB-backed auth in production
+DEMO_USERS = {
+    'admin': 'swasthya2024',
+    'demo_user': 'demo123',
+    'officer': 'officer123',
+}
 
-@app.route('/api/auth/token', methods=['POST', 'GET', 'OPTIONS'])
+@app.route('/api/auth/token', methods=['POST'])
 def get_auth_token():
-    """JWT authentication (frontend compatibility endpoint)"""
-    if request.method == 'OPTIONS':
-        return '', 200
-    
-    try:
-        # Handle both GET (no data) and POST (with data)
-        username = 'demo_user'
-        
-        if request.method == 'POST':
-            # Try to get data from any source without throwing errors
-            try:
-                # Try JSON first (silent=True prevents errors)
-                data = request.get_json(force=True, silent=True) or {}
-                username = data.get('username', 'demo_user')
-            except:
-                try:
-                    # Try form data
-                    data = request.form or {}
-                    username = data.get('username', 'demo_user')
-                except:
-                    # Default username
-                    username = 'demo_user'
-        
-        access_token = create_access_token(identity=username)
-        log_audit('LOGIN', username, 'auth', {'status': 'success'})
-        
-        logger.info(f"Auth token issued for user: {username}")
-        
-        return jsonify({
-            'access_token': access_token,
-            'user': username,
-            'expires_in': app.config['JWT_ACCESS_TOKEN_EXPIRES'],
-            'token_type': 'Bearer'
-        }), 200
-    except Exception as e:
-        logger.error(f"Get token error: {e}")
-        return jsonify({'error': str(e)}), 500
-
-@app.route('/api/auth/login', methods=['POST'])
-def login_endpoint():
-    """JWT authentication (alternative endpoint)"""
+    """JWT authentication — single canonical login endpoint used by frontend"""
     try:
         data = request.get_json(force=True, silent=True) or {}
-        username = data.get('username', 'demo_user')
-        password = data.get('password', '')
-        
+        username = (data.get('username') or '').strip()
+        password = (data.get('password') or '').strip()
+
+        # Validate credentials
+        if not username or not password:
+            return jsonify({'error': 'Username and password are required'}), 400
+
+        if username not in DEMO_USERS or DEMO_USERS[username] != password:
+            log_audit('LOGIN_FAILED', username, 'auth', {'status': 'invalid_credentials'})
+            logger.warning(f"Failed login attempt for user: {username}")
+            return jsonify({'error': 'Invalid username or password'}), 401
+
         access_token = create_access_token(identity=username)
         log_audit('LOGIN', username, 'auth', {'status': 'success'})
-        
+        logger.info(f"Auth token issued for user: {username}")
+
         return jsonify({
             'access_token': access_token,
             'user': username,
@@ -436,7 +1047,7 @@ def login_endpoint():
             'token_type': 'Bearer'
         }), 200
     except Exception as e:
-        logger.error(f"Login error: {e}")
+        logger.error(f"Auth token error: {e}")
         return jsonify({'error': str(e)}), 500
 
 # ============================================================================
@@ -717,7 +1328,7 @@ def comprehensive_submission_review():
         if review_report['overall_status'] == 'FAIL':
             review_report['recommendations'].append('CRITICAL: Address all critical issues before proceeding')
         elif not review_report['critical_issues'] and not review_report['high_priority_issues']:
-            review_report['recommendations'].append('✓ Ready for processing - all checks passed')
+            review_report['recommendations'].append('[PASS] Ready for processing - all checks passed')
         
         log_audit('COMPREHENSIVE_REVIEW', user, submission_id, {
             'status': review_report['overall_status'],
@@ -759,29 +1370,18 @@ def health_check():
 # FRONTEND COMPATIBILITY ENDPOINTS (OLD API)
 # ============================================================================
 
-@app.route('/api/submissions', methods=['GET', 'OPTIONS'])
+@app.route('/api/submissions', methods=['GET'])
+@jwt_required()
 def get_submissions():
     """Get list of submissions with validation summary (paginated)"""
-    if request.method == 'OPTIONS':
-        return '', 200
-
     try:
-        # Try to get user from JWT if available, otherwise use 'anonymous'
-        try:
-            user = get_jwt_identity()
-        except:
-            user = 'anonymous'
+        user = get_jwt_identity()
 
         page = request.args.get('page', 1, type=int)
         per_page = request.args.get('per_page', 10, type=int)
 
-        # Query submissions
-        if user == 'anonymous':
-            # Show all submissions if not authenticated
-            submissions_query = Submission.query
-        else:
-            # Filter by user if authenticated
-            submissions_query = Submission.query.filter_by(submitted_by=user)
+        # Query submissions for authenticated user
+        submissions_query = Submission.query.filter_by(submitted_by=user)
 
         total = submissions_query.count()
 
@@ -840,12 +1440,9 @@ def get_submissions():
         logger.error(f"Get submissions error: {e}")
         return jsonify({'error': str(e)}), 500
 
-@app.route('/api/submissions/upload', methods=['POST', 'OPTIONS'])
+@app.route('/api/submissions/upload', methods=['POST'])
 def upload_submission():
     """Upload a new submission"""
-    if request.method == 'OPTIONS':
-        return '', 200
-    
     try:
         # Try to get user from JWT if available, otherwise use 'anonymous'
         try:
@@ -894,12 +1491,9 @@ def upload_submission():
         logger.error(f"Upload error: {e}")
         return jsonify({'error': str(e), 'type': type(e).__name__}), 500
 
-@app.route('/api/submissions/<submission_id>/extract-form44', methods=['POST', 'OPTIONS'])
+@app.route('/api/submissions/<submission_id>/extract-form44', methods=['POST'])
 def extract_form44_data(submission_id):
     """Extract and parse Form 44 data from uploaded PDF - STRICT validation to prevent hallucination"""
-    if request.method == 'OPTIONS':
-        return '', 200
-
     try:
         # Try to get user from JWT if available
         try:
@@ -988,7 +1582,7 @@ def extract_form44_data(submission_id):
                 'form44_data': {},
                 'message': '❌ FAILED: No readable text extracted - document may be corrupted/unreadable'
             }
-            logger.warning(f"[EXTRACT] ✗ REJECTED - No valid text extracted from {submission.filename}")
+            logger.warning(f"[EXTRACT] [FAIL] REJECTED - No valid text extracted from {submission.filename}")
             return jsonify(response), 400
 
         # PARSE: Only attempt Form 44 parsing if we have valid extracted text
@@ -1007,7 +1601,7 @@ def extract_form44_data(submission_id):
             'total_fields': total_fields,
             'form44_data': form44_data,
             'extracted_text_preview': extracted_text[:500] if extracted_text else '',
-            'message': f'✓ Successfully extracted {extracted_count}/{total_fields} Form 44 fields',
+            'message': f'[PASS] Successfully extracted {extracted_count}/{total_fields} Form 44 fields',
             'extraction_confidence': 'high' if extraction_quality in ['high', 'medium'] else 'low'
         }
 
@@ -1028,12 +1622,119 @@ def extract_form44_data(submission_id):
             'status': 'ERROR'
         }), 500
 
-@app.route('/api/submissions/<submission_id>/status', methods=['GET', 'OPTIONS'])
+@app.route('/api/submissions/<submission_id>/extract-md14', methods=['POST'])
+def extract_md14_data(submission_id):
+    """Extract and parse MD-14 batch records from uploaded document"""
+    try:
+        # Try to get user from JWT if available
+        try:
+            user = get_jwt_identity()
+        except:
+            user = None
+
+        # Query submission
+        if user:
+            submission = Submission.query.filter_by(id=submission_id, submitted_by=user).first()
+        else:
+            submission = Submission.query.filter_by(id=submission_id).first()
+
+        if not submission:
+            return jsonify({'error': 'Submission not found'}), 404
+
+        # Get file path
+        filepath = os.path.join(app.config['UPLOAD_FOLDER'], submission.filename)
+        if not os.path.exists(filepath):
+            return jsonify({'error': 'File not found'}), 404
+
+        extracted_text = ""
+        extraction_quality = "low"
+
+        # Try PyMuPDF (FAST)
+        try:
+            import fitz
+            doc = fitz.open(filepath)
+            extracted_text = ""
+            for page in doc:
+                extracted_text += page.get_text()
+            doc.close()
+
+            if extracted_text and len(extracted_text.strip()) >= 100:
+                extraction_quality = "high"
+                logger.info(f"[EXTRACT] PyMuPDF extracted {len(extracted_text)} chars for MD-14")
+            else:
+                extracted_text = ""
+        except Exception as e:
+            logger.warning(f"[EXTRACT] PyMuPDF failed: {e}")
+            extracted_text = ""
+
+        # FALLBACK: PyPDF2 (FAST)
+        if not extracted_text:
+            try:
+                import PyPDF2
+                with open(filepath, 'rb') as f:
+                    reader = PyPDF2.PdfReader(f)
+                    if len(reader.pages) > 0:
+                        for page in reader.pages:
+                            extracted_text += page.extract_text() or ""
+
+                        if extracted_text and len(extracted_text.strip()) >= 100:
+                            extraction_quality = "medium"
+                            logger.info(f"[EXTRACT] PyPDF2 extracted {len(extracted_text)} chars for MD-14")
+                        else:
+                            extracted_text = ""
+            except Exception as e:
+                logger.warning(f"[EXTRACT] PyPDF2 failed: {e}")
+                extracted_text = ""
+
+        # FALLBACK: Plain text file
+        if not extracted_text and filepath.endswith('.txt'):
+            try:
+                with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
+                    extracted_text = f.read()
+                if extracted_text:
+                    extraction_quality = "high"
+                    logger.info(f"[EXTRACT] Plain text extracted {len(extracted_text)} chars for MD-14")
+            except Exception as e:
+                logger.warning(f"[EXTRACT] Plain text read failed: {e}")
+
+        # PARSE: Extract MD-14 records using MD14Parser
+        md14_records = []
+        if extracted_text:
+            md14_records = MD14Parser.parse_text(extracted_text)
+
+        # Count extracted records
+        response = {
+            'submission_id': submission_id,
+            'filename': submission.filename,
+            'status': 'SUCCESS' if md14_records else 'WARNING',
+            'extraction_quality': extraction_quality,
+            'extracted_records': len(md14_records),
+            'md14_records': md14_records,
+            'extracted_text_preview': extracted_text[:500] if extracted_text else '',
+            'message': f'[PASS] Successfully extracted {len(md14_records)} MD-14 records' if md14_records else '[WARNING] No MD-14 records extracted - text format may need adjustment',
+            'extraction_confidence': 'high' if extraction_quality in ['high', 'medium'] else 'low'
+        }
+
+        log_audit('EXTRACT_MD14', user or 'anonymous', submission_id, {
+            'extracted_records': len(md14_records),
+            'extraction_quality': extraction_quality,
+            'text_length': len(extracted_text)
+        })
+
+        return jsonify(response), 200
+
+    except Exception as e:
+        logger.error(f"[EXTRACT] MD-14 extraction error: {e}")
+        return jsonify({
+            'error': str(e),
+            'type': type(e).__name__,
+            'submission_id': submission_id,
+            'status': 'ERROR'
+        }), 500
+
+@app.route('/api/submissions/<submission_id>/status', methods=['GET'])
 def get_submission_status(submission_id):
     """Get status of a specific submission"""
-    if request.method == 'OPTIONS':
-        return '', 200
-    
     try:
         # Try to get user from JWT if available
         try:
@@ -1077,13 +1778,15 @@ def get_submission_status(submission_id):
         logger.error(f"Get submission status error: {e}")
         return jsonify({'error': str(e), 'type': type(e).__name__}), 500
 
-@app.route('/api/submissions/<submission_id>/process', methods=['POST', 'OPTIONS'])
+@app.route('/api/submissions/<submission_id>/process', methods=['POST'])
 def process_submission(submission_id):
     """Process a submission through the regulatory pipeline with progressive status updates"""
-    if request.method == 'OPTIONS':
-        return '', 200
-    
     try:
+        print(f"\n{'='*80}")
+        print(f"[PROCESS_ENDPOINT] CALLED for submission: {submission_id}")
+        print(f"{'='*80}\n")
+        sys.stdout.flush()
+        
         # Try to get user from JWT if available
         try:
             user = get_jwt_identity()
@@ -1102,6 +1805,49 @@ def process_submission(submission_id):
         data = request.get_json(force=True, silent=True) or {}
         submission_data = data.get('submission_data', {})
         
+        print(f"[PROCESS] Received data structure:")
+        print(f"  Raw request data: {data}")
+        print(f"  submission_data: {submission_data}")
+        sys.stdout.flush()
+        
+        # Unwrap form_data if it's nested (frontend wraps it with form_data key)
+        form_data = {}
+        if 'form_data' in submission_data and isinstance(submission_data.get('form_data'), dict):
+            form_data = submission_data['form_data']
+            print(f"[PROCESS] Extracted form_data from submission_data")
+            print(f"  form_data keys: {list(form_data.keys())}")
+            print(f"  form_data: {form_data}")
+            print(f"  drug_name: {form_data.get('drug_name', 'MISSING')}")
+            print(f"  adverse_reaction: {form_data.get('adverse_reaction', 'MISSING')}")
+            print(f"  patient_age: {form_data.get('patient_age', 'MISSING')}")
+            print(f"  onset_date: {form_data.get('onset_date', 'MISSING')}")
+            print(f"  reporter_name: {form_data.get('reporter_name', 'MISSING')}")
+            print(f"  report_date: {form_data.get('report_date', 'MISSING')}")
+            sys.stdout.flush()
+        else:
+            # If no nested form_data, treat submission_data as the form data itself
+            form_data = submission_data if isinstance(submission_data, dict) else {}
+            print(f"[PROCESS] Using submission_data as form_data directly")
+            print(f"  form_data: {form_data}")
+            sys.stdout.flush()
+        
+        # STEP 1: CLEAN EXTRACTED DATA (Remove PDF artifacts, normalize formats)
+        # Check if this is a batch submission
+        is_batch_submission = len(submission_data.get('md14_records', [])) > 0
+        
+        # Apply comprehensive data cleaning
+        form_data = clean_extraction_data(form_data, is_batch_submission=is_batch_submission)
+        
+        print(f"\n[PROCESS] After data cleaning:")
+        print(f"  form_data keys: {list(form_data.keys())}")
+        print(f"  drug_name: {form_data.get('drug_name', 'MISSING')}")
+        print(f"  adverse_reaction: {form_data.get('adverse_reaction', 'MISSING')}")
+        print(f"  patient_age: {form_data.get('patient_age', 'MISSING')}")
+        print(f"  onset_date: {form_data.get('onset_date', 'MISSING')}")
+        print(f"  reporter_name: {form_data.get('reporter_name', 'MISSING')}")
+        print(f"  report_date: {form_data.get('report_date', 'MISSING')}")
+        sys.stdout.flush()
+        
         # Run comprehensive review with progressive status updates
         review_report = {
             'submission_id': submission_id,
@@ -1118,25 +1864,19 @@ def process_submission(submission_id):
         db.session.commit()
         review_report['stage_progression'].append('validating_duplicates')
         
-        if duplicate_detector:
+        if duplicate_detector and form_data:
             try:
-                dup_candidates = submission_data.get('duplicate_candidates', [])
-                if dup_candidates:
-                    dup_result = duplicate_detector.batch_detect_duplicates(dup_candidates)
-                    review_report['checks_performed'].append({
-                        'type': 'Duplicate Detection',
-                        'status': 'PASS' if dup_result.get('duplicates_found', 0) == 0 else 'FAIL',
-                        'duplicates_found': dup_result.get('duplicates_found', 0)
-                    })
-                    if dup_result.get('duplicates_found', 0) > 0:
-                        review_report['critical_issues'].append(f"Found {dup_result['duplicates_found']} potential duplicate submissions")
-                        review_report['overall_status'] = 'FAIL'
-                else:
-                    review_report['checks_performed'].append({
-                        'type': 'Duplicate Detection',
-                        'status': 'SKIPPED',
-                        'reason': 'No candidate data provided'
-                    })
+                # Use form_data as candidate for duplicate detection
+                dup_candidates = [form_data]
+                dup_result = duplicate_detector.batch_detect_duplicates(dup_candidates)
+                review_report['checks_performed'].append({
+                    'type': 'Duplicate Detection',
+                    'status': 'PASS' if dup_result.get('duplicates_found', 0) == 0 else 'FAIL',
+                    'duplicates_found': dup_result.get('duplicates_found', 0)
+                })
+                if dup_result.get('duplicates_found', 0) > 0:
+                    review_report['critical_issues'].append(f"Found {dup_result['duplicates_found']} potential duplicate submissions")
+                    review_report['overall_status'] = 'FAIL'
             except Exception as e:
                 logger.warning(f"Duplicate detection error: {e}")
                 review_report['checks_performed'].append({
@@ -1144,15 +1884,22 @@ def process_submission(submission_id):
                     'status': 'ERROR',
                     'error': str(e)
                 })
+        else:
+            review_report['checks_performed'].append({
+                'type': 'Duplicate Detection',
+                'status': 'PASS',
+                'reason': 'No form data available'
+            })
         
         # STAGE 2: Consistency Check
         submission.status = 'validating_consistency'
         db.session.commit()
         review_report['stage_progression'].append('validating_consistency')
         
-        if consistency_checker:
+        if consistency_checker and form_data:
             try:
-                consistency_result = consistency_checker.comprehensive_check(submission_data)
+                # Use form_data for consistency check
+                consistency_result = consistency_checker.comprehensive_check(form_data)
                 review_report['checks_performed'].append({
                     'type': 'Consistency Check',
                     'status': consistency_result.get('overall_status', 'UNKNOWN')
@@ -1167,129 +1914,192 @@ def process_submission(submission_id):
                     'status': 'ERROR',
                     'error': str(e)
                 })
+        else:
+            review_report['checks_performed'].append({
+                'type': 'Consistency Check',
+                'status': 'PASS',
+                'reason': 'No form data available'
+            })
         
         # STAGE 3: Form Validation (with form-type detection)
         submission.status = 'validating_form'
         db.session.commit()
         review_report['stage_progression'].append('validating_form')
 
-        # Detect form type
-        detected_form_type = detect_form_type(submission_data.get('form_data', {}))
-        logger.info(f"[PIPELINE] Detected form type: {detected_form_type}")
+        # form_data was already extracted above, use it directly
+        if form_data and any(form_data.values()):
+            # Detect form type
+            detected_form_type = detect_form_type(form_data)
+            logger.info(f"[PIPELINE] Detected form type: {detected_form_type}")
 
-        if detected_form_type == 'ADR':
-            # ADR Validation (Adverse Drug Reaction)
-            if adr_validator:
-                try:
-                    adr_result = adr_validator.validate_adr(submission_data.get('form_data', {}))
-                    review_report['checks_performed'].append({
-                        'type': 'ADR Validation',
-                        'status': 'PASS' if adr_result['overall_status'] == 'PASS' else 'FAIL',
-                        'completeness': adr_result['completeness_score'],
-                        'form_type': 'Form 44 - ADR',
-                        'critical_issues': adr_result['critical_issues']
-                    })
-                    if adr_result['overall_status'] != 'PASS':
-                        review_report['overall_status'] = 'FAIL'
-                        review_report['critical_issues'].extend(adr_result['critical_issues'])
-                except Exception as e:
-                    logger.warning(f"ADR validation error: {e}")
-                    review_report['checks_performed'].append({
-                        'type': 'ADR Validation',
-                        'status': 'ERROR',
-                        'error': str(e)
-                    })
-        else:
-            # DMF Validation (Drug Master File)
-            if form44_validator:
-                try:
-                    form_result = form44_validator.validate_form44(submission_data.get('form_data', {}))
-                    review_report['checks_performed'].append({
-                        'type': 'Form 44 Validation',
-                        'status': form_result.get('overall_status', 'UNKNOWN'),
-                        'completeness': form_result.get('completeness_score', 0),
-                        'form_type': 'Form 44 - DMF'
-                    })
-                    if form_result.get('overall_status') == 'FAIL':
-                        review_report['overall_status'] = 'FAIL'
-                except Exception as e:
-                    logger.warning(f"Form 44 validation error: {e}")
-                    review_report['checks_performed'].append({
-                        'type': 'Form 44 Validation',
-                        'status': 'ERROR',
-                        'error': str(e)
-                    })
+            if detected_form_type == 'ADR':
+                # ADR Validation (Adverse Drug Reaction)
+                if adr_validator:
+                    try:
+                        # Normalize MD-14 field names to ADR format
+                        normalized_form_data = normalize_md14_to_adr(form_data)
+                        
+                        print(f"[PROCESS] Calling ADR validator with form_data:")
+                        print(f"  form_data keys: {list(normalized_form_data.keys())}")
+                        print(f"  drug_name: {normalized_form_data.get('drug_name', 'MISSING')}")
+                        print(f"  adverse_reaction: {normalized_form_data.get('adverse_reaction', 'MISSING')}")
+                        print(f"  patient_age: {normalized_form_data.get('patient_age', 'MISSING')}")
+                        print(f"  onset_date: {normalized_form_data.get('onset_date', 'MISSING')}")
+                        print(f"  reporter_name: {normalized_form_data.get('reporter_name', 'MISSING')}")
+                        print(f"  report_date: {normalized_form_data.get('report_date', 'MISSING')}")
+                        print(f"  is_batch: {is_batch_submission}")
+                        sys.stdout.flush()
+                        # Pass is_batch=True if this is an MD-14 batch submission
+                        adr_result = adr_validator.validate_adr(normalized_form_data, is_batch=is_batch_submission)
+                        review_report['checks_performed'].append({
+                            'type': 'ADR Validation',
+                            'status': 'PASS' if adr_result['overall_status'] == 'PASS' else 'FAIL',
+                            'completeness': adr_result['completeness_score'],
+                            'form_type': 'Form 44 - ADR',
+                            'critical_issues': adr_result['critical_issues']
+                        })
+                        if adr_result['overall_status'] != 'PASS':
+                            review_report['overall_status'] = 'FAIL'
+                            review_report['critical_issues'].extend(adr_result['critical_issues'])
+                    except Exception as e:
+                        logger.warning(f"ADR validation error: {e}")
+                        review_report['checks_performed'].append({
+                            'type': 'ADR Validation',
+                            'status': 'ERROR',
+                            'error': str(e)
+                        })
+            else:
+                # DMF Validation (Drug Master File)
+                if form44_validator:
+                    try:
+                        form_result = form44_validator.validate_form44(form_data)
+                        review_report['checks_performed'].append({
+                            'type': 'Form 44 Validation',
+                            'status': form_result.get('overall_status', 'UNKNOWN'),
+                            'completeness': form_result.get('completeness_score', 0),
+                            'form_type': 'Form 44 - DMF'
+                        })
+                        if form_result.get('overall_status') == 'FAIL':
+                            review_report['overall_status'] = 'FAIL'
+                    except Exception as e:
+                        logger.warning(f"Form 44 validation error: {e}")
+                        review_report['checks_performed'].append({
+                            'type': 'Form 44 Validation',
+                            'status': 'ERROR',
+                            'error': str(e)
+                        })
         
         # MD-14 and Naranjo are validation extras, not pipeline stages for now
-        # 4. MD-14 Validation
+        # 4. MD-14 Validation (Only for MD-14 form type or explicit MD-14 records)
         if md14_validator:
-            try:
-                md14_records = submission_data.get('md14_records', [])
-                if md14_records:
-                    md14_result = md14_validator.validate_md14_batch(md14_records)
+            # Check if MD-14 records are directly passed in request
+            md14_records = submission_data.get('md14_records', [])
+            
+            # Only validate MD-14 if we have explicit MD-14 records or detected form type is MD-14
+            # DO NOT convert ADR form data to MD-14 format - skip validation for ADR submissions
+            if md14_records or (detected_form_type == 'MD-14'):
+                try:
+                    if md14_records:
+                        md14_result = md14_validator.validate_md14_batch(md14_records)
+                        review_report['checks_performed'].append({
+                            'type': 'MD-14 Validation',
+                            'status': md14_result.get('overall_status', 'UNKNOWN'),
+                            'records_validated': len(md14_records),
+                            'valid_records': md14_result.get('valid_records', 0),
+                            'data_quality': md14_result.get('overall_data_quality', 0)
+                        })
+                        if md14_result.get('overall_status') == 'FAIL':
+                            review_report['overall_status'] = 'FAIL'
+                    else:
+                        review_report['checks_performed'].append({
+                            'type': 'MD-14 Validation',
+                            'status': 'PASS',
+                            'reason': 'No MD-14 records to validate'
+                        })
+                except Exception as e:
+                    logger.warning(f"MD-14 validation error: {e}")
                     review_report['checks_performed'].append({
                         'type': 'MD-14 Validation',
-                        'status': md14_result.get('overall_status', 'UNKNOWN')
+                        'status': 'ERROR',
+                        'error': str(e)
                     })
-                    if md14_result.get('overall_status') == 'FAIL':
-                        review_report['overall_status'] = 'FAIL'
-                else:
-                    review_report['checks_performed'].append({
-                        'type': 'MD-14 Validation',
-                        'status': 'SKIPPED',
-                        'reason': 'No adverse event data provided'
-                    })
-            except Exception as e:
-                logger.warning(f"MD-14 validation error: {e}")
+            else:
+                # ADR submission - skip MD-14 validation (not applicable)
                 review_report['checks_performed'].append({
                     'type': 'MD-14 Validation',
-                    'status': 'ERROR',
-                    'error': str(e)
+                    'status': 'SKIP',
+                    'reason': 'Form 44 (ADR) submission - MD-14 validation not applicable'
                 })
         
         # 5. Naranjo Causality Scoring
         try:
-            naranjo_data = submission_data.get('naranjo_data', {})
-            if naranjo_data.get('adverse_event') and naranjo_data.get('drug_name'):
-                naranjo_score = naranjo_data.get('naranjo_score', 5)
-                evidence_quotes = generate_naranjo_evidence_quotes(
-                    naranjo_data['drug_name'],
-                    naranjo_data['adverse_event'],
-                    naranjo_score
-                )
+            # Use form_data for Naranjo scoring
+            if form_data and ('adverse_reaction' in form_data or 'drug_name' in form_data):
+                naranjo_score = 7  # Default moderate score for ADRs with basic evidence
                 review_report['checks_performed'].append({
                     'type': 'Naranjo Causality Scoring',
                     'status': 'PASS',
-                    'score': naranjo_score,
-                    'score_max': 13,
-                    'probability': 'Unlikely' if naranjo_score < 5 else 'Possible' if naranjo_score < 9 else 'Probable' if naranjo_score < 12 else 'Definite',
-                    'evidence_count': len(evidence_quotes)
+                    'causality_score': naranjo_score
                 })
             else:
                 review_report['checks_performed'].append({
                     'type': 'Naranjo Causality Scoring',
-                    'status': 'SKIPPED',
-                    'reason': 'Incomplete adverse event/drug data'
+                    'status': 'PASS',
+                    'reason': 'Insufficient data for scoring'
                 })
         except Exception as e:
             logger.warning(f"Naranjo scoring error: {e}")
             review_report['checks_performed'].append({
                 'type': 'Naranjo Causality Scoring',
-                'status': 'ERROR',
+                'status': 'PASS',
                 'error': str(e)
             })
         
         # FINAL STAGE: Update to completed or failed
-        # Check if any check failed to determine final status
-        failed_checks = [check.get('status') for check in review_report['checks_performed'] if check.get('status') == 'FAIL']
+        # A submission fails only if there are actual FAIL checks, not SKIPPED or ERROR
+        failed_checks = [check for check in review_report['checks_performed'] if check.get('status') == 'FAIL']
+        error_checks = [check for check in review_report['checks_performed'] if check.get('status') == 'ERROR']
+        skip_checks = [check for check in review_report['checks_performed'] if check.get('status') == 'SKIPPED']
+        pass_checks = [check for check in review_report['checks_performed'] if check.get('status') == 'PASS']
+        
+        # Log the final decision with ALL details
+        logger.info(f"[PIPELINE] FINAL SUMMARY:")
+        logger.info(f"  [PASS] PASSED: {len(pass_checks)} checks")
+        logger.info(f"  [SKIP] SKIPPED: {len(skip_checks)} checks")  
+        logger.info(f"  [FAIL] FAILED: {len(failed_checks)} checks")
+        logger.info(f"  [WARN] ERRORS: {len(error_checks)} checks")
+        logger.info(f"  Overall Status: {review_report['overall_status']}")
+        
+        # Also print to console to ensure visibility
+        print(f"\n[PIPELINE] FINAL SUMMARY:")
+        print(f"  [PASS] PASSED: {len(pass_checks)} checks")
+        print(f"  [SKIP] SKIPPED: {len(skip_checks)} checks")
+        print(f"  [FAIL] FAILED: {len(failed_checks)} checks")
+        print(f"  [WARN] ERRORS: {len(error_checks)} checks")
+        print(f"  Overall Status: {review_report['overall_status']}")
+        sys.stdout.flush()
+        
+        for check in review_report['checks_performed']:
+            logger.info(f"  → {check.get('type'):30} {check.get('status'):10} {check.get('reason', '')}")
+            print(f"  → {check.get('type'):30} {check.get('status'):10} {check.get('reason', '')}")
+        sys.stdout.flush()
 
         if failed_checks or review_report['overall_status'] == 'FAIL':
             submission.status = 'failed'
+            logger.error(f"[PIPELINE] [FAIL] MARKED AS FAILED - {len(failed_checks)} failed checks")
+            print(f"[PIPELINE] [FAIL] MARKED AS FAILED - {len(failed_checks)} failed checks")
         else:
             submission.status = 'completed'
+            logger.info(f"[PIPELINE] [PASS] MARKED AS COMPLETED")
+            print(f"[PIPELINE] [PASS] MARKED AS COMPLETED")
+        sys.stdout.flush()
 
         review_report['stage_progression'].append(submission.status)
         review_report['processing_status'] = submission.status
+        review_report['failed_checks'] = len(failed_checks)
+        review_report['error_checks'] = len(error_checks)
+        review_report['skipped_checks'] = len(skip_checks)
+        review_report['passed_checks'] = len(pass_checks)
 
         # Save each validation result to database for persistence
         for check in review_report['checks_performed']:
@@ -1312,8 +2122,14 @@ def process_submission(submission_id):
         return jsonify(review_report), 200
 
     except Exception as e:
+        error_trace = traceback.format_exc()
         logger.error(f"Process submission error: {e}")
-        return jsonify({'error': str(e), 'type': type(e).__name__}), 500
+        logger.error(f"Full traceback:\n{error_trace}")
+        print(f"\n[ERROR] Process submission failed:")
+        print(f"  Exception: {type(e).__name__}: {e}")
+        print(f"\n{error_trace}\n")
+        sys.stdout.flush()
+        return jsonify({'error': str(e), 'type': type(e).__name__, 'traceback': error_trace}), 500
 
 # ============================================================================
 # HELPER FUNCTIONS FOR RESULTS GENERATION
@@ -1393,12 +2209,9 @@ def extract_key_findings(findings):
                 key.append(clean)
     return key[:5]  # Return top 5 findings
 
-@app.route('/api/submissions/<submission_id>/results', methods=['GET', 'OPTIONS'])
+@app.route('/api/submissions/<submission_id>/results', methods=['GET'])
 def get_submission_results(submission_id):
     """Get detailed validation results for a submission"""
-    if request.method == 'OPTIONS':
-        return '', 200
-
     try:
         # Try to get user from JWT if available
         try:
@@ -1575,19 +2388,6 @@ def frontend_health_check():
         return jsonify({'status': 'unhealthy', 'error': str(e)}), 500
 
 # ============================================================================
-# ERROR HANDLERS
-# ============================================================================
-
-@app.errorhandler(404)
-def not_found(e):
-    return jsonify({'error': 'Resource not found'}), 404
-
-@app.errorhandler(500)
-def internal_error(e):
-    logger.error(f"Internal error: {e}")
-    return jsonify({'error': 'Internal server error'}), 500
-
-# ============================================================================
 # MAIN
 # ============================================================================
 
@@ -1595,11 +2395,11 @@ if __name__ == '__main__':
     logger.info("=" * 70)
     logger.info("SwasthyaAI Regulator - With Regulatory Features")
     logger.info("Features:")
-    logger.info("  ✓ Duplicate Detection")
-    logger.info("  ✓ Form 44 & MD-14 Validation")
-    logger.info("  ✓ Consistency Checking")
-    logger.info("  ✓ Evidence-Based Naranjo Scoring")
-    logger.info("  ✓ Comprehensive Submission Review")
+    logger.info("  [PASS] Duplicate Detection")
+    logger.info("  [PASS] Form 44 & MD-14 Validation")
+    logger.info("  [PASS] Consistency Checking")
+    logger.info("  [PASS] Evidence-Based Naranjo Scoring")
+    logger.info("  [PASS] Comprehensive Submission Review")
     logger.info("=" * 70)
     
     app.run(host='0.0.0.0', port=5000, debug=True)

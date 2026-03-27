@@ -7,6 +7,7 @@ from typing import Dict, List, Tuple
 from dataclasses import dataclass
 from enum import Enum
 import json
+import re
 
 class FieldStatus(Enum):
     """Status of a field validation"""
@@ -260,6 +261,7 @@ class Form44Validator:
 class MD14Validator:
     """
     Validates MD-14 (Line Listing of Adverse Events) submissions
+    FLEXIBLE MODE: Accepts multiple date formats, normalizes enum values
     """
     
     REQUIRED_FIELDS = {
@@ -267,21 +269,73 @@ class MD14Validator:
         'patient_age': {'type': 'integer', 'min_value': 0, 'max_value': 150},
         'patient_gender': {'type': 'string', 'enum': ['M', 'F', 'Other']},
         'adverse_event_term': {'type': 'string', 'min_length': 5},
-        'event_onset_date': {'type': 'string', 'pattern': r'^\d{4}-\d{2}-\d{2}$'},  # YYYY-MM-DD
+        'event_onset_date': {'type': 'date', 'formats': [r'^\d{4}-\d{2}-\d{2}$', r'^\d{1,2}[/-]\d{1,2}[/-]\d{2,4}$']},
         'event_severity': {'type': 'string', 'enum': ['Mild', 'Moderate', 'Severe', 'Life-threatening', 'Fatal']},
         'outcome': {'type': 'string', 'enum': ['Recovered', 'Recovering', 'Not Recovered', 'Fatal', 'Unknown']},
         'drug_name': {'type': 'string', 'min_length': 3},
         'dose': {'type': 'string', 'min_length': 2},
         'dechallenge_performed': {'type': 'boolean'},
-        'report_date': {'type': 'string', 'pattern': r'^\d{4}-\d{2}-\d{2}$'}
+        'report_date': {'type': 'date', 'formats': [r'^\d{4}-\d{2}-\d{2}$', r'^\d{1,2}[/-]\d{1,2}[/-]\d{2,4}$']}
     }
     
     def __init__(self):
         pass
     
+    @staticmethod
+    def is_valid_date(date_str, formats=None):
+        """
+        Check if string matches any date format pattern
+        Flexible: accepts YYYY-MM-DD, DD/MM/YYYY, DD-MM-YYYY, etc.
+        """
+        if not date_str or not isinstance(date_str, str):
+            return False
+        
+        if formats is None:
+            # Default flexible date matching
+            formats = [
+                r'^\d{4}-\d{2}-\d{2}$',      # YYYY-MM-DD
+                r'^\d{1,2}[/-]\d{1,2}[/-]\d{2,4}$',  # DD/MM/YYYY or MM/DD/YYYY
+            ]
+        
+        for pattern in formats:
+            if re.match(pattern, date_str.strip()):
+                return True
+        return False
+    
+    @staticmethod
+    def normalize_enum_value(value, enum_options):
+        """
+        Normalize enum value - try exact match, then case-insensitive, then substring
+        """
+        if not value:
+            return None
+        
+        value_str = str(value).strip()
+        
+        # Exact match
+        if value_str in enum_options:
+            return value_str
+        
+        # Case-insensitive match
+        for option in enum_options:
+            if option.lower() == value_str.lower():
+                return option
+        
+        # Substring match (first word of value matches option)
+        words = value_str.split()
+        if words:
+            for word in words:
+                for option in enum_options:
+                    if word.lower() == option.lower():
+                        return option
+        
+        # Return original if no match (will fail validation separately)
+        return None
+    
     def validate_md14_record(self, record: Dict) -> Dict:
         """
         Validate a single MD-14 record (adverse event line item)
+        FLEXIBLE: Handles multiple formats, normalizes values
         """
         result = {
             'case_id': record.get('case_id'),
@@ -296,37 +350,54 @@ class MD14Validator:
         for field, rules in self.REQUIRED_FIELDS.items():
             value = record.get(field)
             
-            # Basic presence check
+            # Boolean fields: accept True/False or truthy/falsy values
+            if rules.get('type') == 'boolean':
+                if value is not None:  # Boolean can be True or False, just needs to exist
+                    valid_fields += 1
+                else:
+                    result['valid'] = False
+                    result['errors'].append(f"Missing mandatory field: {field}")
+                continue
+            
+            # Basic presence check for non-boolean fields
             if not value:
                 result['valid'] = False
                 result['errors'].append(f"Missing mandatory field: {field}")
                 continue
             
-            # Type validation
+            # Type validation for integers
             if rules.get('type') == 'integer':
                 try:
-                    int(value)
-                    valid_fields += 1
+                    int_val = int(value)
+                    if rules.get('min_value') is not None and int_val < rules['min_value']:
+                        result['valid'] = False
+                        result['errors'].append(f"{field} must be >= {rules['min_value']}")
+                    elif rules.get('max_value') is not None and int_val > rules['max_value']:
+                        result['valid'] = False
+                        result['errors'].append(f"{field} must be <= {rules['max_value']}")
+                    else:
+                        valid_fields += 1
                 except (ValueError, TypeError):
                     result['valid'] = False
-                    result['errors'].append(f"{field} must be a number")
+                    result['errors'].append(f"{field} must be a number (got: {value})")
             
-            # Enum validation
+            # Enum validation - FLEXIBLE with normalization
             elif rules.get('enum'):
-                if value in rules['enum']:
+                normalized = self.normalize_enum_value(value, rules['enum'])
+                if normalized:
                     valid_fields += 1
                 else:
                     result['valid'] = False
-                    result['errors'].append(f"{field} must be one of: {', '.join(rules['enum'])}")
+                    result['errors'].append(f"{field} must be one of: {', '.join(rules['enum'])} (got: {value})")
             
-            # Date format validation
-            elif rules.get('pattern') == r'^\d{4}-\d{2}-\d{2}$':
-                import re
-                if re.match(r'^\d{4}-\d{2}-\d{2}$', str(value)):
+            # Date format validation - FLEXIBLE with multiple formats
+            elif rules.get('type') == 'date':
+                formats = rules.get('formats', [r'^\d{4}-\d{2}-\d{2}$', r'^\d{1,2}[/-]\d{1,2}[/-]\d{2,4}$'])
+                if self.is_valid_date(str(value), formats):
                     valid_fields += 1
                 else:
                     result['valid'] = False
-                    result['errors'].append(f"{field} must be in YYYY-MM-DD format")
+                    result['errors'].append(f"{field} must be a valid date format (got: {value})")
             
             else:
                 valid_fields += 1
@@ -345,7 +416,7 @@ class MD14Validator:
     
     def validate_md14_batch(self, records: List[Dict]) -> Dict:
         """
-        Validate multiple MD-14 records
+        Validate multiple MD-14 records - STRICT MODE
         """
         report = {
             'form_type': 'MD-14 - Line Listing of Adverse Events',
@@ -353,6 +424,7 @@ class MD14Validator:
             'valid_records': 0,
             'invalid_records': 0,
             'overall_data_quality': 0.0,
+            'overall_status': 'FAIL',  # Default FAIL, only PASS if valid
             'records': [],
             'summary': {
                 'most_common_ae': '',
@@ -361,6 +433,10 @@ class MD14Validator:
                 'critical_safety_signals': []
             }
         }
+        
+        # Empty records = FAIL
+        if not records:
+            return report
         
         quality_scores = []
         adverse_events = {}
@@ -398,12 +474,13 @@ class MD14Validator:
         report['summary']['severity_distribution'] = severities
         report['summary']['outcome_distribution'] = outcomes
         
-        # Identify safety signals (multiple cases of severe/fatal AEs)
-        severe_count = severities.get('Severe', 0) + severities.get('Life-threatening', 0) + severities.get('Fatal', 0)
-        if severe_count > 3:
-            report['summary']['critical_safety_signals'].append(
-                f"HIGH SIGNAL: {severe_count} cases of severe/life-threatening/fatal AEs"
-            )
+        # STRICT: Pass/Fail based on valid record percentage
+        valid_percentage = (report['valid_records'] / report['total_records'] * 100) if report['total_records'] > 0 else 0
+        
+        if valid_percentage >= 60:  # At least 60% of records must be valid
+            report['overall_status'] = 'PASS'
+        else:
+            report['overall_status'] = 'FAIL'
         
         return report
 

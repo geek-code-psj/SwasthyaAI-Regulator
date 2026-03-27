@@ -1,0 +1,9 @@
+﻿Drug Name: Aspirin
+Patient Age: 45
+Adverse Events: Stomach Pain
+Onset Date: 01/01/2024
+Duration: 3 days
+Severity: Mild
+Outcome: Resolved
+Reporter Name: Dr. Smith
+Report Date: 01/05/2024

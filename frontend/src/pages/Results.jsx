@@ -65,7 +65,7 @@ export default function ResultsPage() {
     } catch (error) {
       if (error.response?.status === 404) {
         toast.error('Results not found');
-        navigate('/dashboard');
+        navigate('/');
       } else {
         toast.error('Failed to fetch results');
       }
@@ -337,6 +337,48 @@ function SummaryTab({ results }) {
             <p className="text-2xl font-bold text-blue-900">{results?.total_checks || 0}</p>
           </div>
         </div>
+
+        {/* Detailed Check Results */}
+        {results?.validation_results && results.validation_results.length > 0 && (
+          <div className="mb-6">
+            <h4 className="text-sm font-semibold text-gray-900 mb-3 uppercase">Validation Check Details</h4>
+            <div className="space-y-2">
+              {results.validation_results.map((check, idx) => (
+                <div key={idx} className={`p-3 rounded-lg border ${
+                  check.status === 'PASS' ? 'bg-green-50 border-green-200' :
+                  check.status === 'FAIL' ? 'bg-red-50 border-red-200' :
+                  check.status === 'SKIPPED' ? 'bg-yellow-50 border-yellow-200' :
+                  'bg-gray-50 border-gray-200'
+                }`}>
+                  <div className="flex items-start justify-between">
+                    <div>
+                      <p className="font-medium text-gray-900">{check.check_type}</p>
+                      <p className={`text-sm ${
+                        check.status === 'PASS' ? 'text-green-700' :
+                        check.status === 'FAIL' ? 'text-red-700' :
+                        check.status === 'SKIPPED' ? 'text-yellow-700' :
+                        'text-gray-700'
+                      }`}>
+                        {check.status === 'FAIL' && check.details?.reason ? check.details.reason :
+                         check.status === 'SKIPPED' ? `Skipped: ${check.details?.reason || 'Not applicable'}` :
+                         check.status === 'ERROR' ? `Error: ${check.details?.error || 'Unknown error'}` :
+                         'PASSED'}
+                      </p>
+                    </div>
+                    <span className={`px-3 py-1 rounded-full text-xs font-semibold ${
+                      check.status === 'PASS' ? 'bg-green-100 text-green-800' :
+                      check.status === 'FAIL' ? 'bg-red-100 text-red-800' :
+                      check.status === 'SKIPPED' ? 'bg-yellow-100 text-yellow-800' :
+                      'bg-gray-100 text-gray-800'
+                    }`}>
+                      {check.status}
+                    </span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
       </div>
 
       <div>

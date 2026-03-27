@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Helmet } from 'react-helmet-async';
 import toast from 'react-hot-toast';
-import { Lock, AlertCircle, CheckCircle } from 'lucide-react';
+import { Lock, AlertCircle, CheckCircle, User } from 'lucide-react';
 
 import { authAPI } from '../services/api';
 import { useAuthStore } from '../stores';
@@ -12,14 +12,22 @@ export default function LoginPage() {
   const { setToken } = useAuthStore();
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
+  const [username, setUsername] = useState('');
+  const [password, setPassword] = useState('');
 
   const handleLogin = async (e) => {
     e.preventDefault();
     setLoading(true);
     setError(null);
 
+    if (!username.trim() || !password.trim()) {
+      setError('Username and password are required.');
+      setLoading(false);
+      return;
+    }
+
     try {
-      const response = await authAPI.getToken();
+      const response = await authAPI.getToken(username.trim(), password.trim());
       const { access_token } = response.data;
 
       setToken(access_token);
@@ -29,7 +37,7 @@ export default function LoginPage() {
         navigate('/', { replace: true });
       }, 1000);
     } catch (err) {
-      const errorMsg = err.response?.data?.error || 'Failed to authenticate. Please try again.';
+      const errorMsg = err.response?.data?.error || 'Invalid credentials. Please try again.';
       setError(errorMsg);
       toast.error(errorMsg);
     } finally {
@@ -78,12 +86,54 @@ export default function LoginPage() {
             )}
 
             {/* Login Form */}
-            <form onSubmit={handleLogin} className="space-y-6">
-              {/* Info Message */}
-              <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
-                <p className="text-sm text-blue-900">
-                  <span className="font-semibold">Demo Login:</span> Click "Sign In" to continue with default credentials.
+            <form onSubmit={handleLogin} className="space-y-5">
+              {/* Demo credentials hint */}
+              <div className="bg-blue-50 border border-blue-200 rounded-lg p-3">
+                <p className="text-xs text-blue-800">
+                  <span className="font-semibold">Demo credentials:</span>{' '}
+                  <code className="bg-blue-100 px-1 rounded">admin</code> /{' '}
+                  <code className="bg-blue-100 px-1 rounded">swasthya2024</code>
                 </p>
+              </div>
+
+              {/* Username field */}
+              <div>
+                <label htmlFor="username" className="block text-sm font-medium text-gray-700 mb-1">
+                  Username
+                </label>
+                <div className="relative">
+                  <User className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
+                  <input
+                    id="username"
+                    type="text"
+                    value={username}
+                    onChange={(e) => setUsername(e.target.value)}
+                    placeholder="Enter username"
+                    required
+                    autoComplete="username"
+                    className="w-full pl-10 pr-4 py-2.5 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                  />
+                </div>
+              </div>
+
+              {/* Password field */}
+              <div>
+                <label htmlFor="password" className="block text-sm font-medium text-gray-700 mb-1">
+                  Password
+                </label>
+                <div className="relative">
+                  <Lock className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
+                  <input
+                    id="password"
+                    type="password"
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    placeholder="Enter password"
+                    required
+                    autoComplete="current-password"
+                    className="w-full pl-10 pr-4 py-2.5 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                  />
+                </div>
               </div>
 
               {/* Submit Button */}
@@ -98,13 +148,13 @@ export default function LoginPage() {
                     Authenticating...
                   </>
                 ) : (
-                  'Sign In with JWT'
+                  'Sign In'
                 )}
               </button>
 
               {/* Additional Info */}
               <div className="text-center text-xs text-gray-600">
-                <p>Government & Healthcare Compliance Platform</p>
+                <p>Government &amp; Healthcare Compliance Platform</p>
                 <p className="mt-1">DPDP Act 2023 | NDHM | ICMR | CDSCO Compliant</p>
               </div>
             </form>

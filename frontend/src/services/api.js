@@ -38,9 +38,11 @@ apiClient.interceptors.response.use(
 );
 
 export const authAPI = {
-  getToken: () => apiClient.post('/auth/token'),
+  getToken: (username, password) =>
+    apiClient.post('/auth/token', { username, password }),
   logout: () => {
-    localStorage.removeItem('auth_token');
+    localStorage.removeItem('access_token');
+    localStorage.removeItem('user');
   },
 };
 

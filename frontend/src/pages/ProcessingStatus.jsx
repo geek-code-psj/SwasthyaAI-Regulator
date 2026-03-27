@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { Helmet } from 'react-helmet-async';
 import { useParams, useNavigate } from 'react-router-dom';
 import toast from 'react-hot-toast';
@@ -27,6 +27,7 @@ const processingStages = [
 export default function ProcessingStatusPage() {
   const { id } = useParams();
   const navigate = useNavigate();
+  const processingInitiatedRef = useRef(false); // Prevent duplicate processing attempts
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [submission, setSubmission] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -36,23 +37,7 @@ export default function ProcessingStatusPage() {
   const [extractedFormData, setExtractedFormData] = useState(null);
   const [extracting, setExtracting] = useState(false);
 
-  useEffect(() => {
-    fetchStatus();
-    const interval = autoRefresh ? setInterval(fetchStatus, 2000) : null;
-    return () => {
-      if (interval) clearInterval(interval);
-    };
-  }, [id, autoRefresh]);
-
-  // Auto-trigger extraction and processing when uploaded status is detected
-  useEffect(() => {
-    if (submission && submission.status === 'uploaded' && !processAttempted && !processing && !extracting) {
-      setProcessAttempted(true);
-      extractAndProcess();
-    }
-  }, [submission, processAttempted, processing, extracting]);
-
-  const fetchStatus = async () => {
+  const fetchStatus = useCallback(async () => {
     try {
       const response = await submissionAPI.getStatus(id);
       const data = response.data;
@@ -78,7 +63,7 @@ export default function ProcessingStatusPage() {
       console.error(error);
       setLoading(false);
     }
-  };
+  }, [id]);
 
   const extractAndProcess = async () => {
     if (extracting || processing || !submission || submission.status !== 'uploaded') return;
@@ -86,20 +71,24 @@ export default function ProcessingStatusPage() {
     setExtracting(true);
     try {
       // Step 1: Extract Form 44 data from PDF
-      console.log('Extracting Form 44 data from PDF...');
+      console.log('[EXTRACT] Starting form extraction for submission:', id);
+      console.log('[EXTRACT] Submission status:', submission.status);
       const extractResponse = await submissionAPI.extractForm44(id);
       
       if (extractResponse.status === 200) {
         const formData = extractResponse.data.form44_data;
         setExtractedFormData(formData);
-        console.log('✓ Form 44 data extracted:', formData);
+        console.log('[EXTRACT] ✓ Form 44 data extracted successfully:', formData);
+        console.log('[EXTRACT] Extracted field count:', Object.keys(formData).length);
         
         // Step 2: Process with extracted data
         setExtracting(false);
         await triggerProcessingWithData(formData);
       }
     } catch (error) {
-      console.warn('Form extraction not available, processing without extracted data:', error);
+      console.warn('[EXTRACT] Form extraction failed:', error.message);
+      console.log('[EXTRACT] Error details:', error.response?.status, error.response?.data);
+      console.warn('[EXTRACT] Falling back to processing without extracted data');
       setExtracting(false);
       // Fall back to processing without extracted data
       await triggerProcessing();
@@ -110,13 +99,20 @@ export default function ProcessingStatusPage() {
     if (processing || !submission) return;
     
     setProcessing(true);
+    console.log('[PROCESS] Starting processing with extracted data for submission:', id);
+    console.log('[PROCESS] Form data keys:', Object.keys(formData).length > 0 ? Object.keys(formData) : 'EMPTY');
     try {
       const response = await submissionAPI.processSubmission(id, { form_data: formData });
+      console.log('[PROCESS] ✓ Processing response received:', response.status);
       if (response.status === 200) {
         toast.success('Processing started with extracted Form 44 data!');
         await fetchStatus();
       }
     } catch (error) {
+      console.error('[PROCESS] ✗ Processing failed:', error.message);
+      console.error('[PROCESS] Error status:', error.response?.status);
+      console.error('[PROCESS] Error response:', error.response?.data);
+      console.error('[PROCESS] Submission ID:', id);
       const errorMsg = error.response?.data?.error || error.message || 'Failed to process submission';
       toast.error(errorMsg);
       console.error('Processing error:', error);
@@ -129,14 +125,19 @@ export default function ProcessingStatusPage() {
     if (processing || !submission || submission.status !== 'uploaded') return;
     
     setProcessing(true);
+    console.log('[PROCESS] Starting processing without extracted data for submission:', id);
     try {
       const response = await submissionAPI.processSubmission(id);
+      console.log('[PROCESS] ✓ Processing response received:', response.status);
       if (response.status === 200) {
         toast.success('Processing started!');
         // Refresh immediately to see updated status
         await fetchStatus();
       }
     } catch (error) {
+      console.error('[PROCESS] ✗ Processing failed:', error.message);
+      console.error('[PROCESS] Error status:', error.response?.status);
+      console.error('[PROCESS] Error data:', error.response?.data);
       const errorMsg = error.response?.data?.error || error.message || 'Failed to process submission';
       toast.error(errorMsg);
       console.error('Processing error:', error);
@@ -197,6 +198,29 @@ export default function ProcessingStatusPage() {
     const stage = getCurrentStage();
     return Math.max(0, (stage - 1) / processingStages.length * 100);
   };
+
+  useEffect(() => {
+    fetchStatus();
+    const interval = autoRefresh ? setInterval(fetchStatus, 2000) : null;
+    return () => {
+      if (interval) clearInterval(interval);
+    };
+  }, [id, autoRefresh, fetchStatus]);
+
+  // Reset processing flag when submission ID changes
+  useEffect(() => {
+    processingInitiatedRef.current = false;
+  }, [id]);
+
+  // Auto-trigger extraction and processing when uploaded status is detected
+  useEffect(() => {
+    // Only start processing once per submission, when status is 'uploaded'
+    if (submission?.status === 'uploaded' && !processingInitiatedRef.current && !processing && !extracting) {
+      processingInitiatedRef.current = true; // Mark as initiated to prevent re-triggering
+      setProcessAttempted(true);
+      extractAndProcess();
+    }
+  }, [submission?.status]); // Minimal deps - only respond to status changes
 
   if (loading) {
     return (
