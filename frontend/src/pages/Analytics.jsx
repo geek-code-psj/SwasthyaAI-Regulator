@@ -23,10 +23,13 @@ export default function Analytics() {
   });
 
   useEffect(() => {
-    fetchAnalytics();
+    fetchAnalytics(true); // Silent initial load
+    // Auto-refresh analytics every 2 seconds to show live data (silent)
+    const interval = setInterval(() => fetchAnalytics(true), 2000);
+    return () => clearInterval(interval);
   }, []);
 
-  const fetchAnalytics = async () => {
+  const fetchAnalytics = async (silent = false) => {
     setLoading(true);
     try {
       const [summary, events, drugs, forms] = await Promise.all([
@@ -43,9 +46,9 @@ export default function Analytics() {
         formTypes: forms.data.form_type_distribution || {}
       });
 
-      toast.success('Analytics loaded');
+      if (!silent) toast.success('Analytics loaded');
     } catch (error) {
-      toast.error('Failed to load analytics');
+      if (!silent) toast.error('Failed to load analytics');
       console.error(error);
     } finally {
       setLoading(false);

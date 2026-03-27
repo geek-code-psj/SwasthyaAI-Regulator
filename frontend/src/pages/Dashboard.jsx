@@ -29,19 +29,22 @@ export default function DashboardPage() {
   const { submissions, setSubmissions } = useSubmissionStore();
 
   useEffect(() => {
-    fetchSubmissions();
+    fetchSubmissions(true); // Silent initial load
+    // Auto-refresh every 3 seconds to show new uploads in real-time (silent)
+    const interval = setInterval(() => fetchSubmissions(true), 3000);
+    return () => clearInterval(interval);
   }, [currentPage]);
 
-  const fetchSubmissions = async () => {
+  const fetchSubmissions = async (silent = false) => {
     setLoading(true);
     try {
       const response = await submissionAPI.listSubmissions(currentPage, 10);
       const { submissions: data, pages } = response.data;
       setSubmissions(data);
       setTotalPages(pages);
-      toast.success('Submissions loaded');
+      if (!silent) toast.success('Submissions loaded');
     } catch (error) {
-      toast.error('Failed to fetch submissions');
+      if (!silent) toast.error('Failed to fetch submissions');
       console.error(error);
     } finally {
       setLoading(false);

@@ -1376,17 +1376,14 @@ def health_check():
 # ============================================================================
 
 @app.route('/api/submissions', methods=['GET'])
-@jwt_required()
 def get_submissions():
-    """Get list of submissions with validation summary (paginated)"""
+    """Get list of all submissions with validation summary (paginated) - No auth required for dashboard sync"""
     try:
-        user = get_jwt_identity()
-
         page = request.args.get('page', 1, type=int)
         per_page = request.args.get('per_page', 10, type=int)
 
-        # Query submissions for authenticated user
-        submissions_query = Submission.query.filter_by(submitted_by=user)
+        # Query all submissions (no user filter - sync with analytics)
+        submissions_query = Submission.query
 
         total = submissions_query.count()
 
@@ -1424,7 +1421,12 @@ def get_submissions():
                 'status': s.status,
                 'created_at': s.created_at.isoformat() if s.created_at else None,
                 'submitted_by': s.submitted_by,
-                # NEW: Summary data
+                # Analytics fields
+                'severity': s.severity or 'Unknown',
+                'outcome': s.outcome or 'Unknown',
+                'adverse_event': s.adverse_event or '',
+                'drug_name': s.drug_name or '',
+                # Validation summary data
                 'validation_status': overall_validation_status,
                 'form_completeness': form_completeness,
                 'critical_issues': critical_issues[:3],  # Top 3 issues
@@ -1447,7 +1449,7 @@ def get_submissions():
 
 @app.route('/api/submissions/upload', methods=['POST'])
 def upload_submission():
-    """Upload a new submission"""
+    """Upload a new submission and auto-extract form data"""
     try:
         # Try to get user from JWT if available, otherwise use 'anonymous'
         try:
@@ -1469,31 +1471,79 @@ def upload_submission():
         filepath = os.path.join(app.config['UPLOAD_FOLDER'], filename)
         file.save(filepath)
         
-        # Create submission record
+        # Initialize submission with analytics fields
+        form_data = {}
+        extracted_text = ""
+        
+        # EXTRACT TEXT AND FORM DATA
+        try:
+            # Try PyMuPDF first (fast)
+            try:
+                import fitz
+                doc = fitz.open(filepath)
+                extracted_text = ""
+                for page in doc:
+                    extracted_text += page.get_text()
+                doc.close()
+                logger.info(f"[UPLOAD] PyMuPDF extracted {len(extracted_text)} chars")
+            except:
+                # Fallback to PyPDF2
+                try:
+                    import PyPDF2
+                    with open(filepath, 'rb') as f:
+                        reader = PyPDF2.PdfReader(f)
+                        for page in reader.pages:
+                            extracted_text += page.extract_text() or ""
+                    logger.info(f"[UPLOAD] PyPDF2 extracted {len(extracted_text)} chars")
+                except:
+                    logger.warning(f"[UPLOAD] Could not extract text from PDF")
+            
+            # Parse form data if extraction succeeded
+            if extracted_text and len(extracted_text.strip()) > 100:
+                try:
+                    form_data = Form44Parser.extract_form44(extracted_text) if Form44Parser else {}
+                    form_data = clean_extraction_data(form_data, is_batch_submission=False)
+                    logger.info(f"[UPLOAD] Form data parsed: {list(form_data.keys())}")
+                except Exception as e:
+                    logger.warning(f"[UPLOAD] Form parsing failed: {e}")
+                    form_data = {}
+        except Exception as e:
+            logger.warning(f"[UPLOAD] Extraction failed: {e}")
+        
+        # Create submission with extracted analytics data
         submission = Submission(
             id=submission_id,
             filename=filename,
             submission_type='PDF',
             status='uploaded',
-            submitted_by=user
+            submitted_by=user,
+            severity=form_data.get('event_severity') or form_data.get('severity', 'Unknown'),
+            outcome=form_data.get('outcome', 'Unknown'),
+            adverse_event=form_data.get('adverse_reaction') or form_data.get('adverse_event', ''),
+            drug_name=form_data.get('drug_name', '')
         )
         db.session.add(submission)
         db.session.commit()
         
         log_audit('UPLOAD_SUBMISSION', user, submission_id, {
             'filename': file.filename,
-            'size': os.path.getsize(filepath)
+            'size': os.path.getsize(filepath),
+            'severity': submission.severity,
+            'outcome': submission.outcome
         })
         
         return jsonify({
             'submission_id': submission_id,
             'filename': file.filename,
-            'status': 'uploaded',
-            'message': 'File uploaded successfully'
+            'status': submission.status,
+            'message': 'File uploaded successfully and data extracted',
+            'form_data': form_data
         }), 200
         
     except Exception as e:
         logger.error(f"Upload error: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
         return jsonify({'error': str(e), 'type': type(e).__name__}), 500
 
 @app.route('/api/submissions/<submission_id>/extract-form44', methods=['POST'])
